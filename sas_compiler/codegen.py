@@ -604,9 +604,9 @@ class CodeGen:
         self.w(f"def {fname}():")
         self.indent += 1
         if stmt.action == "open":
-            self.w(f"_r.ods_html_open({stmt.path!r})")
+            self.w(f"_r.ods_{stmt.destination}_open({stmt.path!r})")
         else:
-            self.w("_r.ods_html_close()")
+            self.w(f"_r.ods_{stmt.destination}_close()")
         self.indent -= 1
         return fname
 
@@ -1027,6 +1027,7 @@ class CodeGen:
             self._gen_proc_compare(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
+        self.w("_r.ods_proc_boundary()")
         self.indent -= 1
         return fname
 
