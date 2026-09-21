@@ -26,6 +26,12 @@ class MacroError(Exception):
     pass
 
 
+def _line_col(text: str, pos: int) -> tuple[int, int]:
+    line = text.count("\n", 0, pos) + 1
+    col_start = text.rfind("\n", 0, pos) + 1
+    return line, pos - col_start + 1
+
+
 _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # macro statement keywords that introduce a construct we special-case
@@ -186,7 +192,8 @@ class MacroProcessor:
                     i += 1 + len(close_kw)
                     continue
             i += 1
-        raise MacroError(f"unterminated %{open_kw} block (missing %{close_kw})")
+        line, col = _line_col(text, start)
+        raise MacroError(f"line {line}, col {col}: unterminated %{open_kw} block (missing %{close_kw})")
 
     @staticmethod
     def _match_kw_at(text: str, i: int, kw: str) -> bool:
@@ -435,7 +442,8 @@ class MacroProcessor:
         self._skip_ws(sc)
         name_m = _WORD_RE.match(sc.text, sc.pos)
         if not name_m:
-            raise MacroError("expected macro name after %macro")
+            line, col = _line_col(sc.text, sc.pos)
+            raise MacroError(f"line {line}, col {col}: expected macro name after %macro")
         name = name_m.group(0)
         sc.pos = name_m.end()
         self._skip_ws(sc)

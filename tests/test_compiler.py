@@ -3,9 +3,10 @@ import math
 import pandas as pd
 import pytest
 
-from sas_compiler.macro import MacroProcessor
+from sas_compiler.macro import MacroProcessor, MacroError
 from sas_compiler.parser import parse
 from sas_compiler.codegen import generate
+from sas_compiler.cli import main as cli_main
 
 
 def run_sas(source: str) -> dict:
@@ -496,6 +497,29 @@ def test_proc_transpose_with_id():
     assert df.loc["East", "Q1"] == 100.0
     assert df.loc["East", "Q2"] == 150.0
     assert df.loc["West", "Q1"] == 200.0
+
+
+def test_unterminated_macro_do_raises_with_location():
+    with pytest.raises(MacroError, match=r"line \d+, col \d+: unterminated %do block"):
+        MacroProcessor().expand("%macro foo;\n%do i = 1 %to 3;\n%put &i;\n%mend foo;\n%foo;")
+
+
+def test_cli_check_reports_ok(tmp_path, capsys):
+    f = tmp_path / "ok.sas"
+    f.write_text("data x; y = 1; run;")
+    rc = cli_main([str(f), "--check"])
+    assert rc == 0
+    assert "OK" in capsys.readouterr().out
+
+
+def test_cli_check_reports_error_cleanly(tmp_path, capsys):
+    f = tmp_path / "bad.sas"
+    f.write_text("%macro foo;\n%do i = 1 %to 3;\n%put &i;\n")
+    rc = cli_main([str(f), "--check"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "line" in err
 
 
 def test_macro_driven_data_step():

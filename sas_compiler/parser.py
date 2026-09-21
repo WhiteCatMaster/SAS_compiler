@@ -27,6 +27,18 @@ class Parser:
         self.toks = Lexer(source).tokenize()
         self.i = 0
 
+    def _line_col(self, pos: int) -> tuple[int, int]:
+        line = self.source.count("\n", 0, pos) + 1
+        col_start = self.source.rfind("\n", 0, pos) + 1
+        return line, pos - col_start + 1
+
+    def _err(self, msg: str, pos: int | None = None) -> "ParseError":
+        if pos is None:
+            pos = self.peek().pos
+        line, col = self._line_col(pos)
+        snippet = self.source.splitlines()[line - 1] if line - 1 < len(self.source.splitlines()) else ""
+        return ParseError(f"line {line}, col {col}: {msg}\n    {snippet.strip()}")
+
     # ------------- token cursor helpers -------------
     def peek(self, off: int = 0) -> Token:
         j = self.i + off
@@ -54,7 +66,7 @@ class Parser:
     def expect(self, ttype: TokType) -> Token:
         t = self.peek()
         if t.type != ttype:
-            raise ParseError(f"expected {ttype} but got {t} near pos {t.pos}")
+            raise self._err(f"expected {ttype.name} but found {t.value!r}", t.pos)
         return self.advance()
 
     def eat_kw(self, word: str) -> bool:
@@ -322,6 +334,30 @@ class Parser:
                         for k in range(lo, hi + 1):
                             elements.append(f"{prefix}{k}")
                         continue
+                    # Single-dash alpha range: a-c -> a, b, c (also xa-xc).
+                    if (len(elt) == 1 and len(nxt) == 1 and elt.isalpha() and nxt.isalpha()):
+                        self.advance()
+                        self.advance()
+                        lo_c, hi_c = ord(elt), ord(nxt)
+                        step = 1 if hi_c >= lo_c else -1
+                        for c in range(lo_c, hi_c + step, step):
+                            elements.append(chr(c))
+                        continue
+                    if (len(elt) > 1 and elt[:-1] == nxt[:-1]
+                            and elt[-1].isalpha() and nxt[-1].isalpha()):
+                        self.advance()
+                        self.advance()
+                        prefix = elt[:-1]
+                        lo_c, hi_c = ord(elt[-1]), ord(nxt[-1])
+                        step = 1 if hi_c >= lo_c else -1
+                        for c in range(lo_c, hi_c + step, step):
+                            elements.append(f"{prefix}{chr(c)}")
+                        continue
+                    # Unrecognized dash: consume '-' so init list still parses;
+                    # nxt is picked up next loop iteration.
+                    self.advance()
+                    elements.append(elt)
+                    continue
                 elements.append(elt)
 
         init_values = []
