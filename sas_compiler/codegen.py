@@ -611,6 +611,8 @@ class CodeGen:
             self._gen_proc_append(proc)
         elif name == "format":
             self._gen_proc_format(proc)
+        elif name == "transpose":
+            self._gen_proc_transpose(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -799,6 +801,74 @@ class CodeGen:
                 self.w(f"print(pd.crosstab(_df[{v1!r}], _df[{v2!r}]))")
             else:
                 self.w(f"print(_df[{req!r}].value_counts(dropna=False))")
+
+    def _gen_proc_transpose(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        out = normalize_dsname(proc.options["out"]) if isinstance(proc.options.get("out"), str) else f"{dsname}_transposed"
+        by_clause = self._clause(proc, "by")
+        var_clause = self._clause(proc, "var")
+        id_clause = self._clause(proc, "id")
+        by_vars = [n for n, _ in by_clause] if by_clause else []
+        var_list = [n for n, _ in var_clause] if var_clause else None
+        idvar = id_clause[0][0] if id_clause else None
+
+        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_byvars = {by_vars!r}")
+        self.w(f"_varlist_fixed = {var_list!r}")
+        self.w(f"_idvar = {idvar!r}")
+        self.w("if _byvars:")
+        self.indent += 1
+        self.w("_group_iter = list(_df.groupby(_byvars, dropna=False, sort=False))")
+        self.indent -= 1
+        self.w("else:")
+        self.indent += 1
+        self.w("_group_iter = [((), _df)]")
+        self.indent -= 1
+        self.w("_rows = []")
+        self.w("for _key, _grp in _group_iter:")
+        self.indent += 1
+        self.w("_key = _key if isinstance(_key, tuple) else (_key,)")
+        self.w("_recs = _grp.to_dict('records')")
+        self.w("if _varlist_fixed is not None:")
+        self.indent += 1
+        self.w("_vlist = _varlist_fixed")
+        self.indent -= 1
+        self.w("else:")
+        self.indent += 1
+        self.w(
+            "_vlist = [c for c in _grp.columns if c not in _byvars "
+            "and c != _idvar and pd.api.types.is_numeric_dtype(_grp[c])]"
+        )
+        self.indent -= 1
+        self.w("if _idvar:")
+        self.indent += 1
+        self.w("_row = dict(zip(_byvars, _key))")
+        self.w("for _rec in _recs:")
+        self.indent += 1
+        self.w("_colname = _r.sas_text(_rec.get(_idvar))")
+        self.w("for _v in _vlist:")
+        self.indent += 1
+        self.w("_row[_colname] = _rec.get(_v)")
+        self.indent -= 1
+        self.indent -= 1
+        self.w("_rows.append(_row)")
+        self.indent -= 1
+        self.w("else:")
+        self.indent += 1
+        self.w("for _v in _vlist:")
+        self.indent += 1
+        self.w("_row = dict(zip(_byvars, _key))")
+        self.w("_row['_name_'] = _v")
+        self.w("for _i, _rec in enumerate(_recs):")
+        self.indent += 1
+        self.w("_row[f'col{_i + 1}'] = _rec.get(_v)")
+        self.indent -= 1
+        self.w("_rows.append(_row)")
+        self.indent -= 1
+        self.indent -= 1
+        self.indent -= 1
+        self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
+        self.last_ds_name = out
 
     def _gen_proc_append(self, proc: A.ProcStep):
         base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None

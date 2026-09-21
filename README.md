@@ -71,7 +71,8 @@ library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
 `SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
 `OUTPUT OUT=`), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
-`FORMAT` (see below), and `SQL` — SQL statements are executed almost
+`TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `FORMAT` (see below),
+and `SQL` — SQL statements are executed almost
 verbatim against duckdb with all current datasets registered as views,
 so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)
 works without any special-casing here.

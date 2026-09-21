@@ -456,6 +456,48 @@ def test_proc_format_value_lists(capsys):
     assert "Unknown" in captured
 
 
+def test_proc_transpose_default():
+    src = """
+    data wide;
+      input id x y;
+      datalines;
+    1 10 20
+    ;
+    run;
+    proc transpose data=wide out=long;
+      by id;
+      var x y;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["long"]
+    assert df["_name_"].tolist() == ["x", "y"]
+    assert df["col1"].tolist() == [10.0, 20.0]
+
+
+def test_proc_transpose_with_id():
+    src = """
+    data sales;
+      input region $ quarter $ amount;
+      datalines;
+    East Q1 100
+    East Q2 150
+    West Q1 200
+    ;
+    run;
+    proc transpose data=sales out=wide;
+      by region;
+      id quarter;
+      var amount;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["wide"].set_index("region")
+    assert df.loc["East", "Q1"] == 100.0
+    assert df.loc["East", "Q2"] == 150.0
+    assert df.loc["West", "Q1"] == 200.0
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;
