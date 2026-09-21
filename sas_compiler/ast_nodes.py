@@ -121,6 +121,7 @@ class ArrayStmt(Stmt):
     length: int | None
     init_values: list = field(default_factory=list)
     lo_bound: int = 1
+    is_temporary: bool = False
 
 
 @dataclass

@@ -650,6 +650,27 @@ def test_proc_univariate_output(capsys):
     assert "50%  3.0" in out
 
 
+def test_temporary_array_lookup():
+    src = """
+    data src;
+      input grp;
+      datalines;
+    1
+    2
+    3
+    ;
+    run;
+    data out;
+      array codes{3} _temporary_ (100, 200, 300);
+      set src;
+      matched = codes{grp};
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"]["matched"].tolist() == [100.0, 200.0, 300.0]
+    assert not any(c.startswith("__tmp_") for c in ds["out"].columns)
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

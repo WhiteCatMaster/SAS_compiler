@@ -318,8 +318,15 @@ class Parser:
             if self.peek().type == TokType.NUMBER:
                 length = int(float(self.advance().value))
 
+        is_temporary = False
+        if self.is_kw("_temporary_"):
+            self.advance()
+            is_temporary = True
+
         elements = []
-        if self.peek().type == TokType.IDENT:
+        if is_temporary:
+            pass
+        elif self.peek().type == TokType.IDENT:
             while self.peek().type == TokType.IDENT:
                 elt = self.advance().value.lower()
                 if self.peek().type == TokType.OP and self.peek().value == "-" and self.peek(1).type == TokType.IDENT:
@@ -367,11 +374,13 @@ class Parser:
         if dim is None:
             dim = len(elements) if elements else len(init_values)
         if not elements:
-            elements = [f"{name}{i}" for i in range(1, dim + 1)]
+            prefix = f"__tmp_{name}_" if is_temporary else name
+            elements = [f"{prefix}{i}" for i in range(1, dim + 1)]
 
         self.skip_to_semi()
         return A.ArrayStmt(name=name, dim=dim, elements=elements, is_char=is_char,
-                            length=length, init_values=init_values, lo_bound=lo_bound)
+                            length=length, init_values=init_values, lo_bound=lo_bound,
+                            is_temporary=is_temporary)
 
     def _parse_array_init_values(self) -> list:
         self.advance()  # '('

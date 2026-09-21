@@ -61,8 +61,9 @@ file. `%SYSFUNC` supports a small allowlist (`TODAY`, `TRIM`, `UPCASE`,
 `first.`/`last.` group processing), dataset options (`DROP=`, `KEEP=`,
 `RENAME=`, `WHERE=`, `IN=`), `ARRAY` (including `array x{n} (v1, v2, ...)`
 initializer lists, numeric or character, with or without explicit element
-names, and explicit bounds via `array x{2020:2023}`) plus
-`DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`, `RETAIN`, the sum statement
+names, explicit bounds via `array x{2020:2023}`, and `_TEMPORARY_`
+lookup arrays) plus `DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`,
+`RETAIN`, the sum statement
 (`var + expr;`), `DO`/`DO WHILE`/`DO UNTIL`/iterative `DO`, `IF`/`THEN`/
 `ELSE` and subsetting `IF`, `OUTPUT` (single or multiple output datasets),
 `DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
@@ -77,7 +78,8 @@ MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
 default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE`),
-`UNIVARIATE` (moments, mode, quantiles, extreme observations — printed
+`UNIVARIATE` (moments, mode, quantiles, extreme observations —
+printed
 report only, no `OUTPUT OUT=`), `FORMAT` (see below), and `SQL` — SQL
 statements are executed almost
 verbatim against duckdb with all current datasets registered as views,

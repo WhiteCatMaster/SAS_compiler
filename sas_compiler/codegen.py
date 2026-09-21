@@ -552,7 +552,11 @@ class CodeGen:
             self.indent -= 1
         self.indent -= 1  # end for _row
 
-        auto_drop = {f"first_{v}" for v in by_vars} | {f"last_{v}" for v in by_vars} | self.hidden_vars
+        temp_array_vars = {e for arrstmt in arrays.values() if arrstmt.is_temporary for e in arrstmt.elements}
+        auto_drop = (
+            {f"first_{v}" for v in by_vars} | {f"last_{v}" for v in by_vars}
+            | self.hidden_vars | temp_array_vars
+        )
         last_name = None
         for (name, opts) in ds.outputs:
             keep_list = sorted(keeps | set(opts.get("keep") or []))
