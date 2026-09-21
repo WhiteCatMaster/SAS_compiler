@@ -684,6 +684,10 @@ class CodeGen:
             self._gen_proc_reg(proc)
         elif name == "logistic":
             self._gen_proc_logistic(proc)
+        elif name == "glm":
+            self._gen_proc_glm(proc)
+        elif name == "fastclus":
+            self._gen_proc_fastclus(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -1087,6 +1091,48 @@ class CodeGen:
         self.w(f"_scored = _r.proc_logistic_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
         if out:
             self.w(f"_DS[{out!r}] = _scored")
+            self.last_ds_name = out
+
+    def _gen_proc_glm(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC GLM requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        class_clause = self._clause(proc, "class")
+        class_vars = [n for n, _ in class_clause] if class_clause else []
+        output_clause = self._clause(proc, "output")
+        self.w(f"_df = _DS[{dsname!r}]")
+        out_stats_lit = "None"
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_stats_lit = repr(self._output_stat_dict(output_clause))
+        self.w(
+            f"_scored = _r.proc_glm_fit(_df, {y!r}, {xs!r}, {class_vars!r}, "
+            f"out_stats={out_stats_lit})"
+        )
+        if out:
+            self.w(f"_DS[{out!r}] = _scored")
+            self.last_ds_name = out
+
+    def _gen_proc_fastclus(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC FASTCLUS requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        k = int(proc.options.get("maxclusters", 2))
+        output_clause = self._clause(proc, "output")
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_clustered = _r.proc_fastclus_fit(_df, {var_list!r}, {k})")
+        if out:
+            self.w(f"_DS[{out!r}] = _clustered")
             self.last_ds_name = out
 
     def _gen_proc_rank(self, proc: A.ProcStep):

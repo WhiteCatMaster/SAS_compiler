@@ -873,3 +873,72 @@ def db_write_table(libref: str, table: str, df: pd.DataFrame, if_exists: str = "
             con.commit()
         finally:
             con.close()
+
+
+# ---------------- statistical PROCs (GLM / FASTCLUS) ----------------
+def proc_glm_fit(df: pd.DataFrame, y: str, xs: list, class_vars: list | None = None,
+                  out_stats: dict | None = None):
+    """Fit an OLS model (statsmodels) like proc_reg_fit, but variables
+    named in `class_vars` are dummy-encoded (drop_first) as categorical
+    predictors instead of being coerced to numeric."""
+    import statsmodels.api as sm
+
+    class_vars = class_vars or []
+    cont_vars = [x for x in xs if x not in class_vars]
+
+    sub = df[[y] + xs].copy()
+    sub[y] = pd.to_numeric(sub[y], errors="coerce")
+    for c in cont_vars:
+        sub[c] = pd.to_numeric(sub[c], errors="coerce")
+    for c in class_vars:
+        sub[c] = sub[c].astype(str)
+    sub = sub.dropna()
+
+    design_parts = []
+    if cont_vars:
+        design_parts.append(sub[cont_vars].astype(float))
+    if class_vars:
+        design_parts.append(pd.get_dummies(sub[class_vars], drop_first=True, dtype=float))
+    X = pd.concat(design_parts, axis=1) if design_parts else pd.DataFrame(index=sub.index)
+    X = sm.add_constant(X)
+
+    model = sm.OLS(sub[y], X).fit()
+    print(model.summary())
+    if not out_stats:
+        return None
+    result = df.loc[sub.index].copy()
+    for name in out_stats.get("p", []):
+        result[name] = model.predict(X)
+    for name in out_stats.get("r", []):
+        result[name] = model.resid
+    return result
+
+
+def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
+    """K-means clustering (scikit-learn). Prints a cluster-frequency /
+    cluster-means summary and returns the input rows augmented with a
+    1-based `cluster` column (matching SAS's 1-based CLUSTER numbering)."""
+    from sklearn.cluster import KMeans
+
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+
+    km = KMeans(n_clusters=k, n_init=10, random_state=0)
+    labels = km.fit_predict(clean) + 1  # 1-based, like SAS
+
+    print("The FASTCLUS Procedure")
+    print(f"Number of Clusters: {k}")
+    print()
+    label_series = pd.Series(labels, index=clean.index, name="cluster")
+    sizes = label_series.value_counts().sort_index()
+    means = clean.groupby(label_series).mean()
+    summary = means.copy()
+    summary.insert(0, "Frequency", sizes)
+    print("Cluster Means")
+    print(summary.to_string())
+    print()
+
+    result = df.loc[mask].copy()
+    result["cluster"] = labels
+    return result

@@ -80,19 +80,26 @@ default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE`),
 `UNIVARIATE` (moments, mode, quantiles, extreme observations —
 printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
-`DESCENDING`, average-rank ties), `FORMAT` (see below), and `SQL` — SQL
-statements are executed almost verbatim against duckdb with all
-current datasets registered as views, so most standard SQL (joins,
-GROUP BY/HAVING, window functions, CTEs) works without any
-special-casing here.
+`DESCENDING`, average-rank ties), `FORMAT` (see below), `GLM`, `FASTCLUS`
+(see below), and `SQL` — SQL statements are executed almost verbatim
+against duckdb with all current datasets registered as views, so most
+standard SQL (joins, GROUP BY/HAVING, window functions, CTEs) works
+without any special-casing here.
 
 **Statistics / ML:** `CORR` (Pearson r and p-value matrix, plus an
 optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
 statsmodels — full summary with R², F-stat, coefficient table, and
-`OUTPUT OUT= P=/R=` for predicted values / residuals), and `LOGISTIC`
+`OUTPUT OUT= P=/R=` for predicted values / residuals), `LOGISTIC`
 (binary logistic regression via statsmodels — summary, odds ratios, and
-`OUTPUT OUT= P=` for predicted probabilities). `MODEL y = x1 x2 ...;`
-is the shared syntax for both REG and LOGISTIC.
+`OUTPUT OUT= P=` for predicted probabilities), `GLM` (OLS via
+statsmodels like `REG`, plus a `CLASS var1 var2;` statement that
+dummy-encodes categorical predictors — drop-first indicator columns —
+before fitting; same `OUTPUT OUT= P=/R=` support), and `FASTCLUS`
+(k-means clustering via scikit-learn — `VAR var1 var2 ...;` for the
+input columns, `MAXCLUSTERS=n` for k (default 2), and `OUTPUT OUT=`
+for the input rows plus a 1-based `cluster` column, alongside a
+printed cluster-frequency/cluster-means summary). `MODEL y = x1 x2
+...;` is the shared syntax for `REG`, `LOGISTIC`, and `GLM`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, or `LIBNAME libref
