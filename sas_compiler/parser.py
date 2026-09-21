@@ -168,6 +168,10 @@ class Parser:
                 steps.append(self.parse_proc_step())
             elif self.is_kw("libname"):
                 steps.append(self.parse_libname())
+            elif self.is_kw("ods"):
+                stmt = self.parse_ods()
+                if stmt is not None:
+                    steps.append(stmt)
             elif self.peek().type == TokType.IDENT and re.match(
                 r"^(title|footnote)\d*$", self.peek().value.lower()
             ):
@@ -194,6 +198,44 @@ class Parser:
             text = " ".join(parts)
         self.skip_to_semi()
         return A.TitleStmt(text=text, kind=kind)
+
+    def parse_ods(self):
+        self.advance()  # 'ods'
+        dest = None
+        if self.peek().type == TokType.IDENT:
+            dest = self.advance().value.lower()
+        is_close = False
+        path = None
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            if self.is_kw("close"):
+                is_close = True
+                self.advance()
+            elif self.is_kw("file") or self.is_kw("body"):
+                self.advance()
+                if self.peek().type == TokType.OP and self.peek().value == "=":
+                    self.advance()
+                if self.peek().type == TokType.STRING:
+                    path = self.advance().value
+            elif self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP and self.peek(1).value == "=":
+                # unrecognized key=value option (e.g. STYLE=...): skip it
+                self.advance()
+                self.advance()
+                if self.peek().type not in (TokType.SEMI, TokType.EOF):
+                    self.advance()
+            else:
+                self.advance()
+        self.skip_to_semi()
+
+        if dest != "html":
+            # only HTML is implemented; every other ODS destination/form
+            # (LISTING, PDF, RTF, _ALL_, SELECT/EXCLUDE, ...) is safely
+            # ignored rather than raising a parse error.
+            return None
+        if is_close:
+            return A.OdsStmt(action="close", destination="html")
+        if path is not None:
+            return A.OdsStmt(action="open", destination="html", path=path)
+        return None  # bare "ods html;" with no FILE=: no-op
 
     def parse_libname(self) -> A.LibnameStmt:
         self.advance()  # 'libname'

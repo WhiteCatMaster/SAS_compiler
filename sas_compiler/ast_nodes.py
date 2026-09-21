@@ -310,5 +310,13 @@ class LibnameStmt:
 
 
 @dataclass
+class OdsStmt:
+    """ODS HTML FILE="path"; / ODS HTML CLOSE; / bare ODS HTML;"""
+    action: str  # 'open' or 'close'
+    destination: str  # 'html'
+    path: str | None = None
+
+
+@dataclass
 class Program:
     steps: list
