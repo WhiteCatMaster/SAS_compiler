@@ -1671,3 +1671,156 @@ class SasHIter:
 
     def prev(self, pdv: dict) -> float:
         return self._load(pdv, len(self._items()) - 1 if self.idx is None else self.idx - 1)
+
+
+# ---------------- PROC COMPARE ----------------
+def _compare_values_equal(a, b) -> bool:
+    a_missing = a is None or (isinstance(a, float) and pd.isna(a))
+    b_missing = b is None or (isinstance(b, float) and pd.isna(b))
+    if a_missing and b_missing:
+        return True
+    if a_missing != b_missing:
+        return False
+    return a == b
+
+
+def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
+                         id_vars: list | None = None, var_list: list | None = None) -> pd.DataFrame:
+    """Print a PROC COMPARE-style report (row alignment by ID or by
+    position, per-variable mismatch counts, and a capped list of
+    differing values) and return a long-form DataFrame of differences
+    with columns _id_/_var_/_base_/_compare_ for optional OUT= use.
+
+    No CRITERION=/fuzzy tolerance, no TRANSFORM=, no BY-group support --
+    numeric/character values are compared for exact equality (missing
+    values on both sides count as equal to each other)."""
+    base_cols = list(base.columns)
+    compare_cols = list(compare.columns)
+    only_base_cols = [c for c in base_cols if c not in compare_cols]
+    only_compare_cols = [c for c in compare_cols if c not in base_cols]
+    exclude = set(id_vars or [])
+    if var_list:
+        common_cols = [c for c in var_list if c in base_cols and c in compare_cols]
+    else:
+        common_cols = [c for c in base_cols if c in compare_cols and c not in exclude]
+
+    print("PROC COMPARE")
+    print(f"  Base dataset:     {len(base)} observations, {len(base_cols)} variables")
+    print(f"  Compare dataset:  {len(compare)} observations, {len(compare_cols)} variables")
+    print()
+    if only_base_cols:
+        print("Variables in BASE but not in COMPARE: " + ", ".join(only_base_cols))
+    if only_compare_cols:
+        print("Variables in COMPARE but not in BASE: " + ", ".join(only_compare_cols))
+    if only_base_cols or only_compare_cols:
+        print()
+
+    diffs: list = []
+    var_match = {c: 0 for c in common_cols}
+    var_diff = {c: 0 for c in common_cols}
+    obs_compared = 0
+    obs_equal = 0
+    base_only_keys: list = []
+    compare_only_keys: list = []
+
+    if id_vars:
+        b_map: dict = {}
+        for r in base.to_dict("records"):
+            b_map.setdefault(tuple(r.get(k) for k in id_vars), r)
+        c_map: dict = {}
+        for r in compare.to_dict("records"):
+            c_map.setdefault(tuple(r.get(k) for k in id_vars), r)
+        seen = set()
+        all_keys = []
+        for k in list(b_map.keys()) + list(c_map.keys()):
+            if k not in seen:
+                seen.add(k)
+                all_keys.append(k)
+
+        def _key_label(k):
+            return ", ".join(f"{kk}={vv}" for kk, vv in zip(id_vars, k))
+
+        for key in all_keys:
+            in_b, in_c = key in b_map, key in c_map
+            if not in_b:
+                compare_only_keys.append(key)
+                continue
+            if not in_c:
+                base_only_keys.append(key)
+                continue
+            obs_compared += 1
+            brow, crow = b_map[key], c_map[key]
+            row_equal = True
+            for col in common_cols:
+                bv, cv = brow.get(col), crow.get(col)
+                if _compare_values_equal(bv, cv):
+                    var_match[col] += 1
+                else:
+                    var_diff[col] += 1
+                    row_equal = False
+                    diffs.append({"_id_": _key_label(key), "_var_": col, "_base_": bv, "_compare_": cv})
+            if row_equal:
+                obs_equal += 1
+    else:
+        n = min(len(base), len(compare))
+        b_records = base.to_dict("records")[:n]
+        c_records = compare.to_dict("records")[:n]
+        if len(base) > n:
+            base_only_keys = list(range(n + 1, len(base) + 1))
+        if len(compare) > n:
+            compare_only_keys = list(range(n + 1, len(compare) + 1))
+        for i, (brow, crow) in enumerate(zip(b_records, c_records), start=1):
+            obs_compared += 1
+            row_equal = True
+            for col in common_cols:
+                bv, cv = brow.get(col), crow.get(col)
+                if _compare_values_equal(bv, cv):
+                    var_match[col] += 1
+                else:
+                    var_diff[col] += 1
+                    row_equal = False
+                    diffs.append({"_id_": i, "_var_": col, "_base_": bv, "_compare_": cv})
+            if row_equal:
+                obs_equal += 1
+
+    if base_only_keys:
+        print(f"Observations in BASE but not in COMPARE: {len(base_only_keys)}")
+    if compare_only_keys:
+        print(f"Observations in COMPARE but not in BASE: {len(compare_only_keys)}")
+    if base_only_keys or compare_only_keys:
+        print()
+
+    print(f"Observations compared: {obs_compared}")
+    print(f"Observations with all compared values equal: {obs_equal}")
+    print()
+
+    any_var_diff = any(v > 0 for v in var_diff.values())
+    identical = (
+        not only_base_cols and not only_compare_cols
+        and not base_only_keys and not compare_only_keys
+        and not any_var_diff
+    )
+    if identical:
+        print("NOTE: No unequal values were found. All values compared are exactly equal.")
+        return pd.DataFrame(columns=["_id_", "_var_", "_base_", "_compare_"])
+
+    print("Variables with Unequal Values")
+    width = max(10, max((len(c) for c in common_cols), default=10) + 2)
+    print("Variable".ljust(width) + "Matches".rjust(10) + "Differences".rjust(14))
+    for col in common_cols:
+        if var_diff[col] > 0:
+            print(col.ljust(width) + str(var_match[col]).rjust(10) + str(var_diff[col]).rjust(14))
+    print()
+
+    shown = diffs[:50]
+    if shown:
+        idw = max(10, max(len(str(d["_id_"])) for d in shown) + 2)
+        varw = max(10, max(len(d["_var_"]) for d in shown) + 2)
+        print("Values Comparison Summary")
+        print("ID/Obs".ljust(idw) + "Variable".ljust(varw) + "Base".rjust(15) + "Compare".rjust(15))
+        for d in shown:
+            print(str(d["_id_"]).ljust(idw) + d["_var_"].ljust(varw) + str(d["_base_"]).rjust(15) + str(d["_compare_"]).rjust(15))
+        if len(diffs) > 50:
+            print(f"... and {len(diffs) - 50} more")
+
+    return pd.DataFrame(diffs)

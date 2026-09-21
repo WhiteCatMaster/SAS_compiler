@@ -994,6 +994,8 @@ class CodeGen:
             self._gen_proc_tabulate(proc)
         elif name == "sgplot":
             self._gen_proc_sgplot(proc)
+        elif name == "compare":
+            self._gen_proc_compare(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -1556,6 +1558,37 @@ class CodeGen:
             if var is None and isinstance(names, list):
                 out_stats.setdefault(statkw, []).extend(names)
         return out_stats
+
+    def _src_for_option(self, proc: A.ProcStep, key: str) -> tuple:
+        """Like _proc_src but for a PROC option other than DATA= (e.g.
+        PROC COMPARE's BASE=/COMPARE=). Returns (python_expr, flat_name)."""
+        raw = proc.options.get(key)
+        if not isinstance(raw, str):
+            raise CodegenError(f"PROC {proc.name.upper()} requires {key.upper()}=")
+        flat = normalize_dsname(raw)
+        if "." in raw:
+            lib, tbl = raw.split(".", 1)
+            if lib.lower() in self.db_libs and lib.lower() != "work":
+                return f"_r.db_read_table({lib.lower()!r}, {tbl.lower()!r})", flat
+        return f"_DS[{flat!r}]", flat
+
+    def _gen_proc_compare(self, proc: A.ProcStep):
+        base_expr, _ = self._src_for_option(proc, "base")
+        compare_expr, _ = self._src_for_option(proc, "compare")
+        id_clause = self._clause(proc, "id")
+        var_clause = self._clause(proc, "var")
+        id_vars = [n for n, _ in id_clause] if id_clause else None
+        var_list = [n for n, _ in var_clause] if var_clause else None
+        self.w(f"_base = {base_expr}")
+        self.w(f"_compare = {compare_expr}")
+        self.w(
+            f"_cmp_diffs = _r.proc_compare_report(_base, _compare, "
+            f"id_vars={id_vars!r}, var_list={var_list!r})"
+        )
+        out_raw = proc.options.get("out")
+        if isinstance(out_raw, str):
+            out = normalize_dsname(out_raw)
+            self._store_out(out_raw, out, "_cmp_diffs")
 
     def _gen_proc_corr(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

@@ -128,7 +128,12 @@ optional `OUT=` stacked with a `_stat_` column), `SGPLOT` (`SCATTER`,
 `DENSITY`, `REFLINE` — multiple
 plot statements overlay onto one figure; saved to a PNG via
 `OUT="path.png"`, or a default `sgplot_N.png` if omitted, since there's
-no interactive display here), and `SQL` — SQL statements are executed
+no interactive display here), `COMPARE` (`BASE=`/`COMPARE=`, `ID`/`VAR`
+statements — rows aligned by `ID` value or, without one, by position;
+prints a per-variable mismatch summary and a capped differences table,
+plus a `NOTE: No unequal values were found` message when the datasets
+truly match; an optional `OUT=` gets the differences as a long-form
+`_id_`/`_var_`/`_base_`/`_compare_` dataset), and `SQL` — SQL statements are executed
 almost verbatim against duckdb with all current datasets registered as
 views, so most standard SQL (joins, GROUP BY/HAVING, window functions,
 CTEs) works without any special-casing here. A `WHERE` statement and the
@@ -221,9 +226,14 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   stored value.
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`SQL` raise a clear
-  `NotImplementedError` naming the missing PROC, rather than silently
-  doing nothing.
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`SQL`
+  raise a clear `NotImplementedError` naming the missing PROC, rather than
+  silently doing nothing.
+- **PROC COMPARE** does exact-equality comparison only (no `CRITERION=`
+  fuzzy tolerance, no `TRANSFORM=`), has no `BY` support (compares the
+  whole BASE/COMPARE datasets as given), and its `ID` alignment takes the
+  first row per key value when a key repeats rather than matching
+  multiple occurrences pairwise.
 
 ## Tests
 
