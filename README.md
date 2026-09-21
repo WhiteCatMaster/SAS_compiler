@@ -89,11 +89,13 @@ stdout), `ABORT ["msg"]`, `DELETE`, `RETURN`, `LABEL` (shown as
 `PROC PRINT` column headers), the `_N_` automatic row counter, a HASH
 object for key-based lookups (`DECLARE HASH h(DATASET: "ds")`,
 `.DEFINEKEY()`/`.DEFINEDATA()`/`.DEFINEDONE()`, `.FIND()`/`.ADD()`/
-`.REMOVE()`/`.CHECK()`, with `KEY: expr` arguments or the current PDV's
-key-variable values when omitted), date/time/datetime literals
-(`'01JAN2010'd`, `'12:34't`, `'01JAN2010:12:34:56'dt`), `TITLE`/`FOOTNOTE`
-(shown on `PROC PRINT` output), and
-a broad function library (string,
+`.REMOVE()`/`.CHECK()`/`.OUTPUT(DATASET: "name")`, with `KEY: expr`
+arguments or the current PDV's key-variable values when omitted), a
+`SET dataset KEY=indexname;` keyed lookup for the same kind of
+table-lookup pattern without a separate HASH object, date/time/datetime
+literals (`'01JAN2010'd`, `'12:34't`, `'01JAN2010:12:34:56'dt`),
+`TITLE`/`FOOTNOTE` (shown on `PROC PRINT` output), and a broad function
+library (string,
 numeric, date, `LAG`, `DIF`, `IFN`/`IFC`, `COALESCE`,
 `TRANSLATE`, `VERIFY`, `PRXMATCH`, `COMPBL`, `REVERSE`, `QUOTE`,
 `DEQUOTE`, `FINDC`, `FINDW`, etc).
@@ -235,12 +237,22 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - The **HASH object** covers single- or multi-key lookups built from a
   `DATASET:` or grown via `.ADD()`, `MULTIDATA:'Y'` (multiple data rows
   per key), sequential `.FIRST()`/`.NEXT()`/`.PREV()`/`.LAST()` walks,
-  and a companion hash iterator object (`DECLARE HITER hi("h")`), but
-  not `.OUTPUT()`.
+  a companion hash iterator object (`DECLARE HITER hi("h")`), and
+  `.OUTPUT(DATASET: "name")` (must be a standalone statement, not
+  assigned to a variable).
 - `SET` nested inside `IF`/`DO` supports a single dataset with sequential
-  cursor reads or `POINT=` random access, plus `NOBS=`/`END=`; other
-  statements (`MERGE`/`UPDATE`/`WHERE`/`INPUT`/`INFILE`/`FILE`/`DATALINES`)
-  stay top-level-only, and `SET ... KEY=` index lookups aren't implemented.
+  cursor reads, `POINT=` random access, or `KEY=` keyed lookup, plus
+  `NOBS=`/`END=`; other statements (`MERGE`/`UPDATE`/`WHERE`/`INPUT`/
+  `INFILE`/`FILE`/`DATALINES`) stay top-level-only. `SET ... KEY=` doesn't
+  use a real SAS index (there's no persistent index infrastructure here):
+  the lookup key is inferred as whichever columns of the KEY= dataset are
+  also present in the DATA step's own current source row (the `/UNIQUE`
+  modifier is accepted and ignored, since a plain lookup is already
+  single-match). A miss sets `_IORC_` to a fixed nonzero sentinel (`1`;
+  this doesn't match any particular real SAS return-code constant — only
+  the zero/nonzero found/not-found distinction is meaningful here) and
+  leaves the KEY= dataset's variables at their prior PDV values, matching
+  SAS's "unrefreshed variables keep their prior value" behavior.
 - **INFILE** covers list input only (no column/pointer controls like `@n`,
   `/`, or informats) with one file per DATA step; short lines are padded
   MISSOVER-style (no FLOWOVER). **FILE** supports one output file per DATA

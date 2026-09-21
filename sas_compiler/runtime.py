@@ -1551,6 +1551,42 @@ def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str 
     return out_path
 
 
+# ---------------- SET ... KEY= keyed lookup ----------------
+def keyed_lookup(df: pd.DataFrame, pdv: dict, row: dict | None = None) -> bool:
+    """`SET dataset KEY=indexname;` -- this compiler has no persistent
+    SAS index infrastructure, so KEY= is treated pragmatically: the
+    lookup key is whichever of `df`'s columns are also columns of the
+    *current source row* (`row`, the dict most recently read by this
+    DATA step's driving SET/MERGE) -- not the full PDV, which can
+    already contain same-named keys seeded to a static default (e.g. a
+    character variable pre-seeded to "" because it's assigned a string
+    literal later in the step) that would otherwise look like a "key"
+    and never match real data. Falls back to the PDV's own keys if no
+    row is given. The actual values compared come from the PDV (so a
+    key variable computed/transformed earlier in the step is still
+    used), only the *set of which columns count as keys* comes from
+    `row`. Returns True and updates `pdv` with the first matching row's
+    values on a hit; returns False and leaves `pdv` untouched on a miss
+    (matching SAS's "unrefreshed variables keep their prior value"
+    behavior for a failed lookup)."""
+    candidates = row if row is not None else pdv
+    key_cols = [c for c in df.columns if c in candidates]
+    if not key_cols:
+        return False
+    mask = pd.Series(True, index=df.index)
+    for c in key_cols:
+        pv = pdv.get(c)
+        if is_missing(pv):
+            mask &= df[c].isna() if pd.api.types.is_numeric_dtype(df[c]) else (df[c] == "")
+        else:
+            mask &= df[c] == pv
+    matched = df[mask]
+    if len(matched) == 0:
+        return False
+    pdv.update(matched.iloc[0].to_dict())
+    return True
+
+
 # ---------------- DATA step HASH object ----------------
 class SasHash:
     """A DATA step HASH object: fast key -> data lookup, built either from
@@ -1622,6 +1658,18 @@ class SasHash:
     def clear(self, pdv: dict = None) -> float:
         self.table.clear()
         return 0.0
+
+    def output(self) -> pd.DataFrame:
+        """.OUTPUT(DATASET: "name") -- dump the hash's current contents
+        (key + data variables, one row per entry, or per MULTIDATA row)
+        as a DataFrame; codegen registers the result into `_DS`."""
+        rows = []
+        for key, entry in self.table.items():
+            for data in (entry if self.multi else [entry]):
+                row = dict(zip(self.keys, key))
+                row.update(data)
+                rows.append(row)
+        return pd.DataFrame(rows)
 
     def __len__(self):
         return len(self.table)
