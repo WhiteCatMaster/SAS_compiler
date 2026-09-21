@@ -1907,26 +1907,74 @@ class SasHIter:
 
 
 # ---------------- PROC COMPARE ----------------
-def _compare_values_equal(a, b) -> bool:
+def _compare_values_equal(a, b, criterion: float = 0.0) -> bool:
     a_missing = a is None or (isinstance(a, float) and pd.isna(a))
     b_missing = b is None or (isinstance(b, float) and pd.isna(b))
     if a_missing and b_missing:
         return True
     if a_missing != b_missing:
         return False
+    if criterion and isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(a - b) <= criterion
     return a == b
 
 
 def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
-                         id_vars: list | None = None, var_list: list | None = None) -> pd.DataFrame:
+                         id_vars: list | None = None, var_list: list | None = None,
+                         by_vars: list | None = None, criterion: float = 0.0) -> pd.DataFrame:
     """Print a PROC COMPARE-style report (row alignment by ID or by
     position, per-variable mismatch counts, and a capped list of
     differing values) and return a long-form DataFrame of differences
-    with columns _id_/_var_/_base_/_compare_ for optional OUT= use.
+    with columns _id_/_var_/_base_/_compare_ (plus one column per BY
+    variable, when BY is used) for optional OUT= use.
 
-    No CRITERION=/fuzzy tolerance, no TRANSFORM=, no BY-group support --
-    numeric/character values are compared for exact equality (missing
-    values on both sides count as equal to each other)."""
+    CRITERION= gives a numeric equality tolerance (abs(a - b) <=
+    criterion counts as equal); BY= runs a separate comparison, with
+    its own printed report, per distinct combination of BY-variable
+    values found across BASE/COMPARE. No TRANSFORM= support, and ID
+    alignment takes the first row per key value when a key repeats
+    rather than matching multiple occurrences pairwise."""
+    if by_vars:
+        all_keys: list = []
+        seen = set()
+        for df in (base, compare):
+            for k in df[by_vars].drop_duplicates().itertuples(index=False, name=None):
+                if k not in seen:
+                    seen.add(k)
+                    all_keys.append(k)
+        all_keys.sort(key=lambda k: tuple("" if v is None else v for v in k))
+        all_diffs = []
+        for key in all_keys:
+            label = ", ".join(f"{c}={sas_str(v)}" for c, v in zip(by_vars, key))
+            print(f"--- {label} ---")
+            mask_b = pd.Series(True, index=base.index)
+            mask_c = pd.Series(True, index=compare.index)
+            for c, v in zip(by_vars, key):
+                mask_b &= base[c] == v
+                mask_c &= compare[c] == v
+            sub_diffs = _proc_compare_single(
+                base[mask_b].drop(columns=by_vars), compare[mask_c].drop(columns=by_vars),
+                id_vars=id_vars, var_list=var_list, criterion=criterion,
+            )
+            for d in sub_diffs:
+                for c, v in zip(by_vars, key):
+                    d[c] = v
+            all_diffs.extend(sub_diffs)
+            print()
+        cols = list(by_vars) + ["_id_", "_var_", "_base_", "_compare_"]
+        return pd.DataFrame(all_diffs, columns=cols) if all_diffs else pd.DataFrame(columns=cols)
+
+    diffs = _proc_compare_single(base, compare, id_vars=id_vars, var_list=var_list, criterion=criterion)
+    return pd.DataFrame(diffs, columns=["_id_", "_var_", "_base_", "_compare_"]) if diffs else \
+        pd.DataFrame(columns=["_id_", "_var_", "_base_", "_compare_"])
+
+
+def _proc_compare_single(base: pd.DataFrame, compare: pd.DataFrame,
+                          id_vars: list | None, var_list: list | None,
+                          criterion: float) -> list:
+    """Run and print one PROC COMPARE report for a single BASE/COMPARE
+    pair (one BY-group's worth, or the whole datasets when BY isn't
+    used); returns the list of difference records."""
     base_cols = list(base.columns)
     compare_cols = list(compare.columns)
     only_base_cols = [c for c in base_cols if c not in compare_cols]
@@ -1986,7 +2034,7 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
             row_equal = True
             for col in common_cols:
                 bv, cv = brow.get(col), crow.get(col)
-                if _compare_values_equal(bv, cv):
+                if _compare_values_equal(bv, cv, criterion):
                     var_match[col] += 1
                 else:
                     var_diff[col] += 1
@@ -2007,7 +2055,7 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
             row_equal = True
             for col in common_cols:
                 bv, cv = brow.get(col), crow.get(col)
-                if _compare_values_equal(bv, cv):
+                if _compare_values_equal(bv, cv, criterion):
                     var_match[col] += 1
                 else:
                     var_diff[col] += 1
@@ -2035,7 +2083,7 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
     )
     if identical:
         print("NOTE: No unequal values were found. All values compared are exactly equal.")
-        return pd.DataFrame(columns=["_id_", "_var_", "_base_", "_compare_"])
+        return []
 
     print("Variables with Unequal Values")
     width = max(10, max((len(c) for c in common_cols), default=10) + 2)
@@ -2056,7 +2104,7 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
         if len(diffs) > 50:
             print(f"... and {len(diffs) - 50} more")
 
-    return pd.DataFrame(diffs)
+    return diffs
 
 
 # ---------------- ODS (HTML / RTF) ----------------

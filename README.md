@@ -135,7 +135,9 @@ statements — rows aligned by `ID` value or, without one, by position;
 prints a per-variable mismatch summary and a capped differences table,
 plus a `NOTE: No unequal values were found` message when the datasets
 truly match; an optional `OUT=` gets the differences as a long-form
-`_id_`/`_var_`/`_base_`/`_compare_` dataset), `FCMP` (user-defined
+`_id_`/`_var_`/`_base_`/`_compare_` dataset; `BY` re-runs the whole
+comparison, with its own printed report, per BY-group; `CRITERION=`
+gives numeric comparisons a fuzzy-equality tolerance), `FCMP` (user-defined
 functions — `FUNCTION name(args) [$]; ... RETURN(expr); ENDSUB;` —
 callable from any later DATA step by name, using the same statement
 grammar as the DATA step itself), and `SQL` — SQL statements are executed
@@ -278,11 +280,11 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL` raise a clear `NotImplementedError` naming the missing PROC, rather
   than silently doing nothing.
-- **PROC COMPARE** does exact-equality comparison only (no `CRITERION=`
-  fuzzy tolerance, no `TRANSFORM=`), has no `BY` support (compares the
-  whole BASE/COMPARE datasets as given), and its `ID` alignment takes the
-  first row per key value when a key repeats rather than matching
-  multiple occurrences pairwise.
+- **PROC COMPARE** supports `BY` (a separate report per BY-group) and
+  `CRITERION=` (a numeric fuzzy-equality tolerance), but has no
+  `TRANSFORM=`, and its `ID` alignment takes the first row per key
+  value when a key repeats rather than matching multiple occurrences
+  pairwise.
 - **PROC FCMP** functions support scalar numeric/character parameters,
   assignment, `IF`/`THEN`/`ELSE`, and `RETURN(expr)` in their bodies (the
   same DATA-step statement grammar, minus anything dataset-shaped like
