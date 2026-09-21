@@ -1126,6 +1126,17 @@ class Parser:
 
     def _parse_return(self):
         self.advance()
+        if self.peek().type == TokType.LPAREN:
+            # RETURN(expr); -- only meaningful inside a PROC FCMP function
+            # body; the DATA step's bare RETURN; keeps its own meaning.
+            self.advance()
+            expr = A.Missing()
+            if self.peek().type != TokType.RPAREN:
+                expr = self.parse_expr()
+            if self.peek().type == TokType.RPAREN:
+                self.advance()
+            self.skip_to_semi()
+            return A.FcmpReturnStmt(expr=expr)
         self.skip_to_semi()
         return A.ReturnStmt()
 
@@ -1364,6 +1375,8 @@ class Parser:
             return self._parse_proc_sql(options)
         if name == "format":
             return self._parse_proc_format(options)
+        if name == "fcmp":
+            return self._parse_proc_fcmp(options)
 
         clauses = []
         while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
@@ -1584,6 +1597,48 @@ class Parser:
             self.advance()
             self.skip_to_semi()
         return A.ProcStep(name="format", options=options, clauses=clauses)
+
+    def _parse_proc_fcmp(self, options) -> A.ProcStep:
+        """PROC FCMP outlib=libref.ds.package;
+        FUNCTION name(arg1, arg2) [$]; <DATA-step-flavored statements>
+        ENDSUB; ... RUN;
+        OUTLIB= is parsed (into `options`, already captured generically by
+        the caller) but not used -- functions become callable from any
+        later DATA step in the same compiled program regardless of
+        OUTLIB=/CMPLIB=, since everything lives in one Python process."""
+        clauses = []
+        while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
+            if not self.is_kw("function") and not self.is_kw("subroutine"):
+                self.skip_to_semi()
+                continue
+            self.advance()  # 'function' / 'subroutine'
+            fname = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
+            params = []
+            if self.peek().type == TokType.LPAREN:
+                self.advance()
+                while self.peek().type != TokType.RPAREN and self.peek().type != TokType.EOF:
+                    if self.peek().type == TokType.IDENT:
+                        params.append(self.advance().value.lower())
+                    else:
+                        self.advance()
+                    if self.peek().type == TokType.COMMA:
+                        self.advance()
+                if self.peek().type == TokType.RPAREN:
+                    self.advance()
+            is_char = False
+            if self.peek().type == TokType.OP and self.peek().value == "$":
+                is_char = True
+                self.advance()
+            self.skip_to_semi()
+            body = self._parse_stmt_list(stop_kws={"endsub"})
+            if self.is_kw("endsub"):
+                self.advance()
+                self.skip_to_semi()
+            clauses.append(("function", fname, params, is_char, body))
+        if self.is_kw("run") or self.is_kw("quit"):
+            self.advance()
+            self.skip_to_semi()
+        return A.ProcStep(name="fcmp", options=options, clauses=clauses)
 
     def _parse_proc_sql(self, options) -> A.ProcStep:
         start = self.peek().pos
