@@ -826,6 +826,45 @@ def test_proc_sql_attach_sqlite(tmp_path, capsys):
     assert "Bob" not in out
 
 
+def test_zero_row_output_preserves_columns():
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    3
+    ;
+    run;
+    data out;
+      set src;
+      y = x * 2;
+      if x > 0 then delete;
+    run;
+    """
+    ds = run_sas(src)
+    # every row was deleted, but the schema should still reflect the
+    # variables that would have existed (regression: used to lose all columns)
+    assert list(ds["out"].columns) == ["x", "y"]
+    assert len(ds["out"]) == 0
+
+
+def test_retain_dash_range_expansion():
+    src = """
+    data out;
+      retain h1-h3 0;
+      h1 + 1;
+      h2 + 2;
+      h3 + 3;
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["out"].iloc[0]
+    assert row["h1"] == 1.0
+    assert row["h2"] == 2.0
+    assert row["h3"] == 3.0
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

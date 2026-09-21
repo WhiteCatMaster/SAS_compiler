@@ -168,16 +168,9 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   stored value.
 - PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`SQL` raise a clear `NotImplementedError`
-  naming the missing PROC, rather than silently doing nothing.
-- A DATA step whose output has **zero rows** (e.g. every row is
-  filtered by a subsetting `IF`) produces an empty dataset with no
-  columns at all, rather than zero rows of the expected shape — the
-  column set is inferred from the emitted rows, and there are none to
-  infer from.
-- `RETAIN var1-var3 0;` does not expand the dash range the way
-  `ARRAY`'s element lists do — write out each variable explicitly
-  (`RETAIN var1 0 var2 0 var3 0;`) until this is fixed.
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`SQL` raise a clear
+  `NotImplementedError` naming the missing PROC, rather than silently
+  doing nothing.
 
 ## Tests
 

@@ -725,11 +725,14 @@ def iter_once():
 
 
 # ---------------- output finalization ----------------
-def finalize_dataset(rows, keep=None, drop=None, rename=None) -> pd.DataFrame:
+def finalize_dataset(rows, keep=None, drop=None, rename=None, fallback_cols=None) -> pd.DataFrame:
     if not rows:
-        cols = []
         if keep:
             cols = list(keep)
+        elif fallback_cols:
+            cols = [c for c in fallback_cols if not drop or c not in drop]
+        else:
+            cols = []
         df = pd.DataFrame(columns=cols)
     else:
         df = pd.DataFrame(rows)

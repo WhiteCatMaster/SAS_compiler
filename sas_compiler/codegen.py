@@ -582,7 +582,7 @@ class CodeGen:
             self.w(
                 f"_df = _r.finalize_dataset(_out_rows[{name!r}], "
                 f"keep={keep_list!r} or None, drop={drop_list!r} or None, "
-                f"rename={rename_map!r} or None)"
+                f"rename={rename_map!r} or None, fallback_cols=list(pdv.keys()))"
             )
             if name != "_null_":
                 self.w(f"_DS[{name!r}] = _df")

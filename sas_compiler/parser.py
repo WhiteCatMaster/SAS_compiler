@@ -364,34 +364,11 @@ class Parser:
                 elt = self.advance().value.lower()
                 if self.peek().type == TokType.OP and self.peek().value == "-" and self.peek(1).type == TokType.IDENT:
                     nxt = self.peek(1).value.lower()
-                    m1 = re.match(r"^([a-zA-Z_]+)(\d+)$", elt)
-                    m2 = re.match(r"^([a-zA-Z_]+)(\d+)$", nxt)
-                    if m1 and m2 and m1.group(1) == m2.group(1):
+                    expanded = self._expand_dash_range(elt, nxt)
+                    if expanded is not None:
                         self.advance()
                         self.advance()
-                        prefix = m1.group(1)
-                        lo, hi = int(m1.group(2)), int(m2.group(2))
-                        for k in range(lo, hi + 1):
-                            elements.append(f"{prefix}{k}")
-                        continue
-                    # Single-dash alpha range: a-c -> a, b, c (also xa-xc).
-                    if (len(elt) == 1 and len(nxt) == 1 and elt.isalpha() and nxt.isalpha()):
-                        self.advance()
-                        self.advance()
-                        lo_c, hi_c = ord(elt), ord(nxt)
-                        step = 1 if hi_c >= lo_c else -1
-                        for c in range(lo_c, hi_c + step, step):
-                            elements.append(chr(c))
-                        continue
-                    if (len(elt) > 1 and elt[:-1] == nxt[:-1]
-                            and elt[-1].isalpha() and nxt[-1].isalpha()):
-                        self.advance()
-                        self.advance()
-                        prefix = elt[:-1]
-                        lo_c, hi_c = ord(elt[-1]), ord(nxt[-1])
-                        step = 1 if hi_c >= lo_c else -1
-                        for c in range(lo_c, hi_c + step, step):
-                            elements.append(f"{prefix}{chr(c)}")
+                        elements.extend(expanded)
                         continue
                     # Unrecognized dash: consume '-' so init list still parses;
                     # nxt is picked up next loop iteration.
@@ -414,6 +391,29 @@ class Parser:
         return A.ArrayStmt(name=name, dim=dim, elements=elements, is_char=is_char,
                             length=length, init_values=init_values, lo_bound=lo_bound,
                             is_temporary=is_temporary)
+
+    @staticmethod
+    def _expand_dash_range(elt: str, nxt: str):
+        """Expand a SAS name-range like 'h1-h3' -> ['h1','h2','h3'], or
+        'a-c' / 'xa-xc' -> ['a','b','c'] / ['xa','xb','xc']. Returns None
+        if elt/nxt don't form a recognized range pattern."""
+        m1 = re.match(r"^([a-zA-Z_]+)(\d+)$", elt)
+        m2 = re.match(r"^([a-zA-Z_]+)(\d+)$", nxt)
+        if m1 and m2 and m1.group(1) == m2.group(1):
+            prefix = m1.group(1)
+            lo, hi = int(m1.group(2)), int(m2.group(2))
+            return [f"{prefix}{k}" for k in range(lo, hi + 1)]
+        if len(elt) == 1 and len(nxt) == 1 and elt.isalpha() and nxt.isalpha():
+            lo_c, hi_c = ord(elt), ord(nxt)
+            step = 1 if hi_c >= lo_c else -1
+            return [chr(c) for c in range(lo_c, hi_c + step, step)]
+        if (len(elt) > 1 and len(nxt) > 1 and elt[:-1] == nxt[:-1]
+                and elt[-1].isalpha() and nxt[-1].isalpha()):
+            prefix = elt[:-1]
+            lo_c, hi_c = ord(elt[-1]), ord(nxt[-1])
+            step = 1 if hi_c >= lo_c else -1
+            return [f"{prefix}{chr(c)}" for c in range(lo_c, hi_c + step, step)]
+        return None
 
     def _parse_array_init_values(self) -> list:
         self.advance()  # '('
@@ -442,6 +442,22 @@ class Parser:
         while self.peek().type == TokType.IDENT or self.peek().type == TokType.NUMBER:
             if self.peek().type == TokType.IDENT:
                 name = self.advance().value.lower()
+                if self.peek().type == TokType.OP and self.peek().value == "-" and self.peek(1).type == TokType.IDENT:
+                    nxt = self.peek(1).value.lower()
+                    expanded = self._expand_dash_range(name, nxt)
+                    if expanded is not None:
+                        self.advance()
+                        self.advance()
+                        val = None
+                        if self.peek().type == TokType.NUMBER:
+                            val = float(self.advance().value)
+                        elif self.peek().type == TokType.STRING:
+                            val = self.advance().value
+                        entries.extend((n, val) for n in expanded)
+                        continue
+                    # Unrecognized dash pattern: consume it so the loop
+                    # doesn't stall on a token neither IDENT nor NUMBER.
+                    self.advance()
                 val = None
                 if self.peek().type == TokType.NUMBER:
                     val = float(self.advance().value)
