@@ -79,7 +79,11 @@ lookup arrays) plus `DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`,
 `ELSE` and subsetting `IF`, `OUTPUT` (single or multiple output datasets),
 `DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
 `INPUT`/`DATALINES`/`CARDS`, `DELETE`, `RETURN`, `LABEL` (shown as
-`PROC PRINT` column headers), and a broad function library (string,
+`PROC PRINT` column headers), the `_N_` automatic row counter, a HASH
+object for key-based lookups (`DECLARE HASH h(DATASET: "ds")`,
+`.DEFINEKEY()`/`.DEFINEDATA()`/`.DEFINEDONE()`, `.FIND()`/`.ADD()`/
+`.REMOVE()`/`.CHECK()`, with `KEY: expr` arguments or the current PDV's
+key-variable values when omitted), and a broad function library (string,
 numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
@@ -157,6 +161,10 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   expansion is a complete pass that finishes before the DATA step ever
   runs, it cannot feed back into `%IF`/`%DO` control flow the way real
   SAS's interleaved macro/DATA-step execution can.
+- The **HASH object** covers single- or multi-key lookups built from a
+  `DATASET:` or grown via `.ADD()`, but not `MULTIDATA:` (multiple data
+  rows per key), iteration methods (`.FIRST()`/`.NEXT()`), `.OUTPUT()`,
+  or a companion hash iterator object.
 - Only `SET`/`MERGE`/`WHERE`/`INPUT`/`DATALINES` at the **top level** of
   a DATA step are supported (not nested inside `IF`/`DO`); table-lookup
   patterns like `SET ds POINT=;` aren't implemented.

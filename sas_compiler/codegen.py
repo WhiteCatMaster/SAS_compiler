@@ -188,7 +188,32 @@ class CodeGen:
             return self._gen_binop(e, varmap)
         if isinstance(e, A.Call):
             return self._gen_call(e, varmap)
+        if isinstance(e, A.HashMethodCall):
+            return self._gen_hash_method(e, varmap)
         raise CodegenError(f"cannot generate expression for {e!r}")
+
+    def _gen_hash_method(self, e: A.HashMethodCall, varmap: str) -> str:
+        hashref = f"_hashes[{e.hashname!r}]"
+        method = e.method.lower()
+        if method in ("definekey", "definedata"):
+            names = []
+            for (_, expr) in e.args:
+                if not isinstance(expr, A.Str):
+                    raise CodegenError(f"hash .{method}() expects string literal argument(s)")
+                names.append(repr(expr.value.lower()))
+            return f"{hashref}.{method}({', '.join(names)})"
+        if method == "definedone":
+            return f"{hashref}.definedone()"
+        if method in ("find", "check", "remove"):
+            key_exprs = [self.gen_expr(v, varmap) for (k, v) in e.args if (k or "").lower() == "key"]
+            if key_exprs:
+                return f"{hashref}.{method}({varmap}, key_values=[{', '.join(key_exprs)}])"
+            return f"{hashref}.{method}({varmap})"
+        if method == "add":
+            return f"{hashref}.add({varmap})"
+        if method == "clear":
+            return f"{hashref}.clear()"
+        raise CodegenError(f"unsupported hash object method .{e.method}()")
 
     def _gen_binop(self, e: A.BinOp, varmap: str) -> str:
         if e.op == "in":
@@ -270,6 +295,10 @@ class CodeGen:
             self.w("raise _r._RowDelete()")
         elif isinstance(s, A.ReturnStmt):
             self.w("raise _r._RowReturn()")
+        elif isinstance(s, A.ExprStmt):
+            self.w(self.gen_expr(s.expr))
+        elif isinstance(s, A.DeclareHashStmt):
+            self._gen_declare_hash(s)
         elif isinstance(s, (A.SetStmt, A.MergeStmt, A.WhereStmt, A.InputStmt, A.DatalinesStmt)):
             raise CodegenError(
                 f"{type(s).__name__} may only appear at the top level of a DATA step, "
@@ -280,6 +309,18 @@ class CodeGen:
             pass  # declarative; only meaningful at top level, already handled there
         else:
             raise CodegenError(f"cannot generate statement for {s!r}")
+
+    def _gen_declare_hash(self, s: A.DeclareHashStmt):
+        ds_arg = None
+        for (argname, expr) in s.args:
+            if (argname or "").lower() == "dataset":
+                if not isinstance(expr, A.Str):
+                    raise CodegenError("declare hash: dataset: expects a string literal")
+                ds_arg = normalize_dsname(expr.value)
+        if ds_arg:
+            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash(_DS.get({ds_arg!r}))")
+        else:
+            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash()")
 
     def _gen_assign(self, s: A.Assign):
         expr_code = self.gen_expr(s.expr)
@@ -490,6 +531,7 @@ class CodeGen:
         self.w(f"def {fname}():")
         self.indent += 1
         self.w("_lag = _r.new_lag_state()")
+        self.w("_hashes = {}")
         self.w("pdv = {}")
         for v in sorted(char_vars):
             self.w(f"pdv[{v!r}] = ''")
@@ -538,8 +580,11 @@ class CodeGen:
         else:
             self.w("_iter = _r.iter_once()")
 
+        self.w("_rownum = 0")
         self.w("for _row, _flags in _iter:")
         self.indent += 1
+        self.w("_rownum += 1")
+        self.w("pdv['_n_'] = float(_rownum)")
         self.w("pdv.update(_row)")
         self.w("for _byv, (_isf, _isl) in _flags.items():")
         self.indent += 1
@@ -572,7 +617,7 @@ class CodeGen:
         temp_array_vars = {e for arrstmt in arrays.values() if arrstmt.is_temporary for e in arrstmt.elements}
         auto_drop = (
             {f"first_{v}" for v in by_vars} | {f"last_{v}" for v in by_vars}
-            | self.hidden_vars | temp_array_vars
+            | self.hidden_vars | temp_array_vars | {"_n_"}
         )
         last_name = None
         for (name, opts, db_info) in ds.outputs:

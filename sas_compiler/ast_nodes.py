@@ -61,6 +61,16 @@ class DotVar(Expr):
     var: str
 
 
+@dataclass
+class HashMethodCall(Expr):
+    """<hashname>.<method>(args) -- a DATA step HASH object method call,
+    usable either as an expression (e.g. `rc = h.find();`) or, wrapped in
+    ExprStmt, as a standalone statement (e.g. `h.add();`)."""
+    hashname: str
+    method: str
+    args: list  # [(argname_or_None, Expr)]
+
+
 # ---------------- statements ----------------
 class Stmt:
     pass
@@ -193,6 +203,20 @@ class DeleteStmt(Stmt):
 @dataclass
 class ReturnStmt(Stmt):
     pass
+
+
+@dataclass
+class ExprStmt(Stmt):
+    """An expression used as a standalone statement (currently only
+    produced for a bare HASH object method call, e.g. `h.add();`)."""
+    expr: Expr
+
+
+@dataclass
+class DeclareHashStmt(Stmt):
+    """declare hash <name>(args); -- args e.g. [("dataset", Str("lookup"))]."""
+    hashname: str
+    args: list  # [(argname_or_None, Expr)]
 
 
 # ---------------- top-level steps ----------------

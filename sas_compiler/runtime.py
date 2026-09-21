@@ -945,3 +945,65 @@ def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
     result = df.loc[mask].copy()
     result["cluster"] = labels
     return result
+
+
+# ---------------- DATA step HASH object ----------------
+class SasHash:
+    """A DATA step HASH object: fast key -> data lookup, built either from
+    a source dataset (`declare hash h(dataset: "lookup");`) or grown
+    dynamically via .add(). Keys are stored as tuples of the raw (missing-
+    aware) key values; data is stored as a dict of {varname: value}."""
+
+    def __init__(self, source_df: "pd.DataFrame | None" = None):
+        self.keys: list = []
+        self.datas: list = []
+        self.table: dict = {}
+        self._source_df = source_df
+
+    def definekey(self, *names):
+        self.keys.extend(n.lower() for n in names)
+
+    def definedata(self, *names):
+        self.datas.extend(n.lower() for n in names)
+
+    def definedone(self):
+        if self._source_df is None:
+            return
+        for row in self._source_df.to_dict("records"):
+            key = tuple(row.get(k, MISSING) for k in self.keys)
+            data = {d: row.get(d, MISSING) for d in self.datas}
+            self.table[key] = data
+        self._source_df = None
+
+    def _current_key(self, pdv: dict, key_values=None) -> tuple:
+        if key_values is not None:
+            return tuple(key_values)
+        return tuple(pdv.get(k, MISSING) for k in self.keys)
+
+    def find(self, pdv: dict, key_values=None) -> float:
+        entry = self.table.get(self._current_key(pdv, key_values))
+        if entry is None:
+            return 1.0
+        for d, v in entry.items():
+            pdv[d] = v
+        return 0.0
+
+    def check(self, pdv: dict, key_values=None) -> float:
+        """Like .find() but doesn't copy data values into the PDV."""
+        return 0.0 if self._current_key(pdv, key_values) in self.table else 1.0
+
+    def add(self, pdv: dict, key_values=None) -> float:
+        key = self._current_key(pdv, key_values)
+        self.table[key] = {d: pdv.get(d, MISSING) for d in self.datas}
+        return 0.0
+
+    def remove(self, pdv: dict, key_values=None) -> float:
+        self.table.pop(self._current_key(pdv, key_values), None)
+        return 0.0
+
+    def clear(self, pdv: dict = None) -> float:
+        self.table.clear()
+        return 0.0
+
+    def __len__(self):
+        return len(self.table)
