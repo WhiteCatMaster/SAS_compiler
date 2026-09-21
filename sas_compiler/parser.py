@@ -948,6 +948,15 @@ class Parser:
                     names.append(self.advance().value.lower())
                 clauses.append(("ranks", names))
                 self.skip_to_semi()
+            elif ckw == "model":
+                self.advance()
+                start = self.peek().pos
+                self.skip_to_semi()
+                end_tok_pos = self.peek().pos
+                raw = self.source[start:end_tok_pos].strip()
+                if raw.endswith(";"):
+                    raw = raw[:-1]
+                clauses.append(("model", raw.strip()))
             else:
                 start = self.peek().pos
                 self.skip_to_semi()

@@ -741,3 +741,84 @@ def finalize_dataset(rows, keep=None, drop=None, rename=None) -> pd.DataFrame:
     if rename:
         df = df.rename(columns=rename)
     return df
+
+
+# ---------------- statistical PROCs (CORR / REG / LOGISTIC) ----------------
+def proc_corr_report(df: pd.DataFrame, cols: list):
+    """Print a PROC CORR-style Pearson correlation report (r and p-value
+    per pair) and return the correlation matrix as a DataFrame."""
+    from scipy import stats as _stats
+
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    print(f"{len(cols)} Variables: " + "  ".join(cols))
+    print()
+    print("Pearson Correlation Coefficients, N = " + str(len(sub)))
+    print("Prob > |r| under H0: Rho=0")
+    print()
+    width = max(10, max(len(c) for c in cols) + 2)
+    print("".rjust(width) + "".join(c.rjust(width) for c in cols))
+    corr = pd.DataFrame(index=cols, columns=cols, dtype=float)
+    for c1 in cols:
+        rvals, pvals = [], []
+        for c2 in cols:
+            pair = sub[[c1, c2]].dropna()
+            if c1 == c2:
+                r, p = 1.0, 0.0
+            elif len(pair) < 2:
+                r, p = float("nan"), float("nan")
+            else:
+                r, p = _stats.pearsonr(pair[c1], pair[c2])
+            corr.loc[c1, c2] = r
+            rvals.append(r)
+            pvals.append(p)
+        print(c1.rjust(width) + "".join(f"{v:.4f}".rjust(width) for v in rvals))
+        print("".rjust(width) + "".join(
+            ("".rjust(width) if c1 == c2n else f"<{p:.4f}>".rjust(width))
+            for c2n, p in zip(cols, pvals)
+        ))
+    print()
+    return corr
+
+
+def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
+    """Fit an OLS regression (statsmodels), print its summary, and
+    optionally return the input rows augmented with predicted/residual
+    columns per `out_stats` (e.g. {'p': ['pred'], 'r': ['resid']})."""
+    import statsmodels.api as sm
+
+    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
+    X = sm.add_constant(sub[xs])
+    model = sm.OLS(sub[y], X).fit()
+    print(model.summary())
+    if not out_stats:
+        return None
+    result = df.loc[sub.index].copy()
+    for name in out_stats.get("p", []):
+        result[name] = model.predict(X)
+    for name in out_stats.get("r", []):
+        result[name] = model.resid
+    return result
+
+
+def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
+    """Fit a binary logistic regression (statsmodels), print its summary,
+    and optionally return predicted-probability columns per `out_stats`."""
+    import math as _math
+    import statsmodels.api as sm
+
+    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
+    X = sm.add_constant(sub[xs])
+    model = sm.Logit(sub[y], X).fit(disp=0)
+    print(model.summary())
+    print()
+    print("Odds Ratio Estimates")
+    for name, coef in model.params.items():
+        if name == "const":
+            continue
+        print(f"  {name}: {_math.exp(coef):.4f}")
+    if not out_stats:
+        return None
+    result = df.loc[sub.index].copy()
+    for name in out_stats.get("p", []):
+        result[name] = model.predict(X)
+    return result

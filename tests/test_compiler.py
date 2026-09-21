@@ -695,6 +695,80 @@ def test_proc_rank_descending_with_ties():
     assert df.loc["Dave", "rank_score"] == 3.5
 
 
+def test_proc_corr_matrix():
+    src = """
+    data src;
+      input x y;
+      datalines;
+    1 2
+    2 4
+    3 6
+    4 8
+    5 10
+    ;
+    run;
+    proc corr data=src;
+      var x y;
+    run;
+    """
+    ds = run_sas(src)
+    # proc_corr_report doesn't register a dataset unless OUT= is given
+    assert "src" in ds
+
+
+def test_proc_reg_fits_and_scores():
+    src = """
+    data src;
+      input x y;
+      datalines;
+    1 2
+    2 4
+    3 6
+    4 8
+    5 10
+    ;
+    run;
+    proc reg data=src;
+      model y = x;
+      output out=scored p=predicted r=resid;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    assert df["predicted"].round(4).tolist() == [2.0, 4.0, 6.0, 8.0, 10.0]
+    assert all(abs(r) < 1e-6 for r in df["resid"])
+
+
+def test_proc_logistic_fits_and_scores():
+    src = """
+    data src;
+      input hours pass;
+      datalines;
+    1 0
+    2 0
+    3 0
+    4 1
+    5 0
+    6 1
+    7 1
+    8 0
+    9 1
+    10 1
+    ;
+    run;
+    proc logistic data=src;
+      model pass = hours;
+      output out=scored p=predicted_prob;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    assert len(df) == 10
+    assert df["predicted_prob"].between(0, 1).all()
+    # predicted probability should be monotonically increasing with hours
+    assert df.sort_values("hours")["predicted_prob"].is_monotonic_increasing
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

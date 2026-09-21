@@ -653,6 +653,12 @@ class CodeGen:
             self._gen_proc_univariate(proc)
         elif name == "rank":
             self._gen_proc_rank(proc)
+        elif name == "corr":
+            self._gen_proc_corr(proc)
+        elif name == "reg":
+            self._gen_proc_reg(proc)
+        elif name == "logistic":
+            self._gen_proc_logistic(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -972,6 +978,78 @@ class CodeGen:
         self.w("print('  highest: ' + ', '.join(str(v) for v in _sorted.tail(5).tolist()))")
         self.w("print()")
         self.indent -= 1
+
+    @staticmethod
+    def _parse_model_stmt(raw: str):
+        m = re.match(r"^\s*([A-Za-z_]\w*)\s*(?:\([^)]*\))?\s*=\s*(.+)$", raw, re.S)
+        if not m:
+            raise CodegenError(f"could not parse MODEL statement: {raw!r}")
+        y = m.group(1).lower()
+        rhs = m.group(2)
+        xs = [tok.lower() for tok in re.split(r"[\s+]+", rhs.strip()) if tok and tok != "+"]
+        return y, xs
+
+    @staticmethod
+    def _output_stat_dict(output_clause: dict) -> dict:
+        out_stats: dict = {}
+        for (statkw, var, names) in output_clause.get("stats", []):
+            if var is None and isinstance(names, list):
+                out_stats.setdefault(statkw, []).extend(names)
+        return out_stats
+
+    def _gen_proc_corr(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        self.w(f"_df = _DS[{dsname!r}]")
+        if var_clause:
+            cols = [n for n, _ in var_clause]
+        else:
+            self.w("_cols = [c for c in _df.columns if pd.api.types.is_numeric_dtype(_df[c])]")
+            cols = None
+        cl = repr(cols) if cols is not None else "_cols"
+        self.w(f"_corr = _r.proc_corr_report(_df, {cl})")
+        out = proc.options.get("out") or proc.options.get("outp")
+        if isinstance(out, str):
+            out = normalize_dsname(out)
+            self.w("_corr_out = _corr.reset_index().rename(columns={'index': '_name_'})")
+            self.w(f"_DS[{out!r}] = _corr_out")
+            self.last_ds_name = out
+
+    def _gen_proc_reg(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC REG requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        output_clause = self._clause(proc, "output")
+        self.w(f"_df = _DS[{dsname!r}]")
+        out_stats_lit = "None"
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_stats_lit = repr(self._output_stat_dict(output_clause))
+        self.w(f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
+        if out:
+            self.w(f"_DS[{out!r}] = _scored")
+            self.last_ds_name = out
+
+    def _gen_proc_logistic(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC LOGISTIC requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        output_clause = self._clause(proc, "output")
+        self.w(f"_df = _DS[{dsname!r}]")
+        out_stats_lit = "None"
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_stats_lit = repr(self._output_stat_dict(output_clause))
+        self.w(f"_scored = _r.proc_logistic_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
+        if out:
+            self.w(f"_DS[{out!r}] = _scored")
+            self.last_ds_name = out
 
     def _gen_proc_rank(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

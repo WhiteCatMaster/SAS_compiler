@@ -81,10 +81,18 @@ default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `UNIVARIATE` (moments, mode, quantiles, extreme observations —
 printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
 `DESCENDING`, average-rank ties), `FORMAT` (see below), and `SQL` — SQL
-statements are executed almost
-verbatim against duckdb with all current datasets registered as views,
-so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)
-works without any special-casing here.
+statements are executed almost verbatim against duckdb with all
+current datasets registered as views, so most standard SQL (joins,
+GROUP BY/HAVING, window functions, CTEs) works without any
+special-casing here.
+
+**Statistics / ML:** `CORR` (Pearson r and p-value matrix, plus an
+optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
+statsmodels — full summary with R², F-stat, coefficient table, and
+`OUTPUT OUT= P=/R=` for predicted values / residuals), and `LOGISTIC`
+(binary logistic regression via statsmodels — summary, odds ratios, and
+`OUTPUT OUT= P=` for predicted probabilities). `MODEL y = x1 x2 ...;`
+is the shared syntax for both REG and LOGISTIC.
 
 **Formats:** a `FORMAT` statement's assignments are tracked per dataset
 (and propagate through `PROC SORT`), and `PROC PRINT` renders formatted
