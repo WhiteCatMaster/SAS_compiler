@@ -289,9 +289,12 @@ class FcmpReturnStmt(Stmt):
 
 @dataclass
 class TitleStmt(Stmt):
-    """TITLE/FOOTNOTE statement: printed atop/below PROC PRINT output."""
+    """TITLEn/FOOTNOTEn statement: printed atop/below PROC PRINT output.
+    Setting slot n clears every slot numbered higher than n (matching real
+    SAS), so a bare TITLE;/FOOTNOTE; (n=1, blank text) clears them all."""
     text: str
     kind: str  # 'title' or 'footnote'
+    number: int = 1
 
 
 # ---------------- top-level steps ----------------

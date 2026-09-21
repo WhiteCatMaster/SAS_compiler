@@ -865,6 +865,93 @@ def test_retain_dash_range_expansion():
     assert row["h3"] == 3.0
 
 
+def test_title_footnote_numbered_slots(capsys):
+    src = """
+    data a; x = 1; run;
+    title1 'Orion Star Sales Staff';
+    title2 'Salary report';
+    title3 'September2026';
+    footnote1 'Confidential';
+    title2 'TEST';
+    proc print data=a; run;
+    title;
+    footnote;
+    proc print data=a; run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    first_print_pos = out.index("Obs")
+    before = out[:first_print_pos]
+    after = out[first_print_pos:]
+    # title1 survives, title3 is cancelled by setting title2, title2 becomes TEST
+    assert "Orion Star Sales Staff" in before
+    assert "TEST" in before
+    assert "September2026" not in before
+    assert "Confidential" in after
+    # after `title;`/`footnote;` clear everything, nothing prints again
+    assert "Orion Star Sales Staff" not in after.split("Confidential", 1)[1]
+    assert "TEST" not in after.split("Confidential", 1)[1]
+
+
+def test_proc_print_id_not_in_var_list(capsys):
+    src = """
+    data a;
+      input id name $ score;
+      datalines;
+    1 Alice 90
+    2 Bob 80
+    ;
+    run;
+    proc print data=a;
+      id id;
+      var name score;
+    run;
+    """
+    ds = run_sas(src)
+    # the underlying dataset is unaffected -- only PROC PRINT's *display*
+    # treats id specially (as the row label instead of a data column)
+    assert list(ds["a"].columns) == ["id", "name", "score"]
+    out = capsys.readouterr().out
+    # the id values (1.0/2.0) become the row label; "id" isn't a second,
+    # duplicate data column in the printed table
+    assert "1.0" in out and "2.0" in out
+    header_line = out.splitlines()[0]
+    assert "id" not in header_line.split()
+
+
+def test_proc_print_by_not_in_var_list_groups_correctly(capsys):
+    src = """
+    data a;
+      input grp $ x;
+      datalines;
+    a 1
+    a 2
+    b 5
+    ;
+    run;
+    proc print data=a;
+      by grp;
+      var x;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "grp=a" in out
+    assert "grp=b" in out
+    # regression: a stray for/else bug used to print a third, ungrouped
+    # table after the two BY-group tables
+    assert out.count("Obs") == 2
+
+
+def test_mmddyy_width_six_drops_separators():
+    from sas_compiler.runtime import apply_format
+    import datetime
+    d = (datetime.date(1993, 11, 21) - datetime.date(1960, 1, 1)).days
+    assert apply_format(float(d), "mmddyy8.") == "11/21/93"
+    assert apply_format(float(d), "mmddyy6.") == "112193"
+    assert apply_format(float(d), "mmddyy10.") == "11/21/1993"
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

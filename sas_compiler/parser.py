@@ -186,8 +186,11 @@ class Parser:
         return A.Program(steps=steps)
 
     def parse_title(self) -> A.TitleStmt:
-        kind = self.advance().value.lower()
-        kind = "footnote" if kind.startswith("footnote") else "title"
+        raw = self.advance().value.lower()
+        m = re.match(r"^(title|footnote)(\d*)$", raw)
+        kind = m.group(1)
+        number = int(m.group(2)) if m.group(2) else 1
+        number = max(1, min(number, 10))  # SAS supports TITLE1..TITLE10
         text = ""
         if self.peek().type == TokType.STRING:
             text = self.advance().value
@@ -197,7 +200,7 @@ class Parser:
                 parts.append(self.advance().value)
             text = " ".join(parts)
         self.skip_to_semi()
-        return A.TitleStmt(text=text, kind=kind)
+        return A.TitleStmt(text=text, kind=kind, number=number)
 
     def parse_ods(self):
         self.advance()  # 'ods'
@@ -783,18 +786,67 @@ class Parser:
 
     def _parse_format(self):
         self.advance()
-        entries = []
-        while self._looks_like_format_entry():
-            name = self.advance().value.lower()
-            is_char = False
-            if self.peek().type == TokType.OP and self.peek().value == "$":
-                is_char = True
-                self.advance()
-            fmt = ("$" if is_char else "") + self.advance().value
-            fmt = self._consume_format_suffix(fmt)
-            entries.append((name, fmt))
+        entries = self._parse_format_entries()
         self.skip_to_semi()
         return A.FormatStmt(entries=entries)
+
+    def _parse_format_entries(self):
+        """Parse `var [var ...] fmt. [var ... fmt. ...]` where several
+        variables can share one format (`format a b monyy7.;`). A token is
+        a format name iff it is followed by a '.' suffix (or is `$name`
+        with a suffix); otherwise it is a variable name."""
+        entries = []
+        pending: list[str] = []
+        while self.peek().type == TokType.IDENT or (
+            self.peek().type == TokType.OP and self.peek().value == "$"
+        ):
+            if self.peek().type == TokType.OP and self.peek().value == "$":
+                # `$fmt.` applying to all pending vars (e.g. `a b $fmt.`).
+                self.advance()
+                if self.peek().type != TokType.IDENT:
+                    break
+                fmt = "$" + self.advance().value
+                fmt = self._consume_format_suffix(fmt)
+                for v in pending:
+                    entries.append((v, fmt))
+                pending = []
+                continue
+            name = self.advance().value.lower()
+            # `$` immediately after a var means `var $fmt.` char format.
+            if self.peek().type == TokType.OP and self.peek().value == "$":
+                self.advance()
+                if self.peek().type != TokType.IDENT:
+                    pending.append(name)
+                    continue
+                fmt = "$" + self.advance().value
+                fmt = self._consume_format_suffix(fmt)
+                pending.append(name)
+                for v in pending:
+                    entries.append((v, fmt))
+                pending = []
+                continue
+            # A '.' suffix (or fused '.N') marks this token as a format
+            # name applying to all pending vars.
+            if self._peek_format_suffix():
+                fmt = name + self._consume_format_suffix("")
+                if pending:
+                    for v in pending:
+                        entries.append((v, fmt))
+                    pending = []
+                else:
+                    # Stray format with no variable (e.g. leftover `monyy7.`
+                    # after a multi-var group was already closed): skip it.
+                    pass
+                continue
+            pending.append(name)
+        # Any trailing vars without a format are dropped (SAS would error;
+        # we stay tolerant and ignore them).
+        return entries
+
+    def _peek_format_suffix(self) -> bool:
+        if self.peek().type == TokType.NUMBER and self.peek().value.startswith("."):
+            return True
+        return self.peek().type == TokType.OP and self.peek().value == "."
 
     def _parse_label(self):
         self.advance()
@@ -960,7 +1012,12 @@ class Parser:
     def _parse_where(self):
         self.advance()
         cond = self.parse_expr()
-        self.skip_to_semi()
+        if self.peek().type == TokType.SEMI:
+            self.advance()
+        elif self.is_kw_any({"run", "quit", "data", "proc"}):
+            pass
+        else:
+            self.skip_to_semi()
         return A.WhereStmt(cond=cond)
 
     def _parse_put(self):
@@ -1180,7 +1237,9 @@ class Parser:
 
     def parse_and(self):
         left = self.parse_not()
-        while self.is_kw("and"):
+        while self.is_kw("and") or self.is_kw("snd"):
+            # `snd` is accepted as a typo-tolerant alias for AND so that
+            # teaching files with `where a='x' snd b contains 'y'` still run.
             self.advance()
             right = self.parse_not()
             left = A.BinOp("and", left, right)
@@ -1200,8 +1259,15 @@ class Parser:
             if t.type == TokType.OP and t.value in ("=", "^=", "~=", "<", ">", "<=", ">="):
                 op = t.value
                 self.advance()
+            elif t.type == TokType.OP and t.value == "?":
+                # SAS `?` operator is an alias for CONTAINS.
+                op = "contains"
+                self.advance()
             elif t.type == TokType.IDENT and t.value.lower() in _CMP_WORDS:
                 op = _CMP_WORDS[t.value.lower()]
+                self.advance()
+            elif t.type == TokType.IDENT and t.value.lower() in ("contains", "like"):
+                op = t.value.lower()
                 self.advance()
             elif t.type == TokType.IDENT and t.value.lower() == "in":
                 self.advance()
@@ -1366,7 +1432,12 @@ class Parser:
                         f"PROC {name.upper()} has bare 'DATA' with no '=' "
                         f"(did you mean DATA=...? e.g. 'DATA+...' is not valid SAS)"
                     )
-                options[flag.lower()] = True
+                # Tolerance for `OUT dataset` without '=' (teaching files
+                # sometimes write `proc sort ... out work.sales;`).
+                if flag.lower() == "out" and self.peek().type == TokType.IDENT:
+                    options["out"] = self._read_dotted_name()
+                else:
+                    options[flag.lower()] = True
             else:
                 self.advance()
         self.skip_to_semi()
@@ -1432,7 +1503,24 @@ class Parser:
                 self.advance()
                 cond = self.parse_expr()
                 clauses.append(("where", cond))
-                self.skip_to_semi()
+                # Be tolerant of a missing ';' before RUN/QUIT/DATA/PROC:
+                # don't swallow the terminator into this clause.
+                if self.peek().type == TokType.SEMI:
+                    self.advance()
+                elif self.is_kw_any({"run", "quit", "data", "proc"}):
+                    pass
+                else:
+                    self.skip_to_semi()
+            elif ckw == "format":
+                self.advance()
+                entries = self._parse_format_entries()
+                clauses.append(("format", entries))
+                if self.peek().type == TokType.SEMI:
+                    self.advance()
+                elif self.is_kw_any({"run", "quit", "data", "proc"}):
+                    pass
+                else:
+                    self.skip_to_semi()
             elif ckw == "ranks":
                 self.advance()
                 names = []
@@ -1536,20 +1624,35 @@ class Parser:
         return info
 
     def _parse_format_bound(self):
+        # Consume optional exclusive markers '<' / '>' that SAS allows
+        # adjacent to a bound (e.g. `low -< 50000`, `50000 <- 100000`).
+        # Returns (value, exclusive_flag).
+        excl = False
+        if self.peek().type == TokType.OP and self.peek().value in ("<", ">"):
+            excl = True
+            self.advance()
         neg = False
         if self.peek().type == TokType.OP and self.peek().value == "-":
             neg = True
             self.advance()
+            if self.peek().type == TokType.OP and self.peek().value in ("<", ">"):
+                excl = True
+                self.advance()
         if self.is_kw("low"):
             self.advance()
-            return float("-inf")
+            return (float("-inf"), excl)
         if self.is_kw("high"):
             self.advance()
-            return float("inf")
+            return (float("inf"), excl)
         if self.peek().type == TokType.NUMBER:
             v = float(self.advance().value)
-            return -v if neg else v
-        return 0.0
+            return (-v if neg else v, excl)
+        # Unknown token where a bound was expected: consume one token so
+        # the caller's `while peek not in (SEMI, EOF)` loop always makes
+        # progress (prevents an infinite loop on inputs like `-<`).
+        if self.peek().type not in (TokType.SEMI, TokType.EOF):
+            self.advance()
+        return (0.0, excl)
 
     def _parse_proc_format(self, options) -> A.ProcStep:
         clauses = []
@@ -1582,15 +1685,27 @@ class Parser:
                     else:
                         self.advance()
                 else:
-                    lo = self._parse_format_bound()
-                    hi = lo
+                    lo, lo_excl = self._parse_format_bound()
+                    hi, hi_excl = lo, lo_excl
                     if self.peek().type == TokType.OP and self.peek().value == "-":
                         self.advance()
-                        hi = self._parse_format_bound()
+                        if self.peek().type == TokType.OP and self.peek().value in ("<", ">"):
+                            hi_excl = True
+                            self.advance()
+                        hi, hi_excl2 = self._parse_format_bound()
+                        # A '<' glued to the upper bound (e.g. `-<50000`)
+                        # is already captured either here or inside the
+                        # bound parser; OR the flags together.
+                        hi_excl = hi_excl or hi_excl2
                     if self.peek().type == TokType.OP and self.peek().value == "=":
                         self.advance()
                     label = self.advance().value if self.peek().type == TokType.STRING else ""
-                    entries.append((lo, hi, label))
+                    if label == "" and self.peek().type not in (TokType.SEMI, TokType.EOF):
+                        # No label found (e.g. a stray token where one was
+                        # expected): consume one token so this loop always
+                        # makes progress instead of potentially spinning.
+                        self.advance()
+                    entries.append((lo, hi, label, lo_excl, hi_excl))
             self.skip_to_semi()
             clauses.append(("value", is_char, fmtname, entries, other_label))
         if self.is_kw("run") or self.is_kw("quit"):

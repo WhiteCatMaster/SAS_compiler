@@ -173,8 +173,8 @@ class CodeGen:
         self.w("_DS = {}")
         self.w("_FMT = {}")
         self.w("_LBL = {}")
-        self.w("_TITLE = ''")
-        self.w("_FOOTNOTE = ''")
+        self.w("_TITLES = [''] * 10")
+        self.w("_FOOTNOTES = [''] * 10")
         self.w("")
         fnames = []
         for step in prog.steps:
@@ -291,6 +291,10 @@ class CodeGen:
             return f"(_r.truthy({left}) and _r.truthy({right}))"
         if e.op == "or":
             return f"(_r.truthy({left}) or _r.truthy({right}))"
+        if e.op == "contains":
+            return f"_r.contains({left}, {right})"
+        if e.op == "like":
+            return f"_r.sas_like({left}, {right})"
         cmp_map = {"=": "eq", "^=": "ne", "~=": "ne", "<": "lt", ">": "gt", "<=": "le", ">=": "ge"}
         if e.op in cmp_map:
             return f"_r.{cmp_map[e.op]}({left}, {right})"
@@ -624,9 +628,13 @@ class CodeGen:
         fname = f"_step_{self.step_idx}"
         self.w(f"def {fname}():")
         self.indent += 1
-        var = "_FOOTNOTE" if stmt.kind == "footnote" else "_TITLE"
-        self.w(f"global {var}")
-        self.w(f"{var} = {stmt.text!r}")
+        var = "_FOOTNOTES" if stmt.kind == "footnote" else "_TITLES"
+        slot = stmt.number - 1
+        # Setting slot n clears every slot numbered higher than n first,
+        # matching real SAS -- a bare TITLE;/FOOTNOTE; (slot 0, blank
+        # text) therefore clears all of them.
+        self.w(f"for _i in range({slot}, 10): {var}[_i] = ''")
+        self.w(f"{var}[{slot}] = {stmt.text!r}")
         self.indent -= 1
         return fname
 
@@ -905,7 +913,7 @@ class CodeGen:
             libref, table = db_info
             src_expr = f"_r.db_read_table({libref!r}, {table!r})"
         else:
-            src_expr = f"_DS[{name!r}]"
+            src_expr = f"_r.get_proc_df(_DS, {name!r})"
         keep = opts.get("keep") or []
         drop = opts.get("drop") or []
         rename = opts.get("rename") or {}
@@ -1132,13 +1140,14 @@ class CodeGen:
         """Python expression loading a PROC's DATA= dataset: real-database
         read-through when it names a libref registered via LIBNAME
         (SQLite file, server URL, or a directory of .sas7bdat/.csv files),
-        else the in-memory _DS entry."""
+        else the in-memory _DS entry (via a tolerant lookup that warns
+        and falls back instead of raising KeyError)."""
         raw = proc.options.get("data")
         if isinstance(raw, str) and "." in raw:
             lib, tbl = raw.split(".", 1)
             if lib.lower() in self.db_libs and lib.lower() != "work":
                 return f"_r.db_read_table({lib.lower()!r}, {tbl.lower()!r})"
-        return f"_DS[{dsname!r}]"
+        return f"_r.get_proc_df(_DS, {dsname!r})"
 
     def _store_out(self, raw: str | None, flat: str, df_var: str):
         """Store a PROC OUT= result into _DS[flat] (and last_ds_name), with
@@ -1179,15 +1188,24 @@ class CodeGen:
         return repr(float(v))
 
     def _gen_proc_format(self, proc: A.ProcStep):
-        for (_, is_char, fmtname, entries, other_label) in proc.clauses:
+        for clause in proc.clauses:
+            (_, is_char, fmtname, entries, other_label) = clause
             key = ("$" if is_char else "") + fmtname
             if is_char:
                 pairs = ", ".join(f"{v!r}: {lbl!r}" for v, lbl in entries)
                 self.w(f"_r.USER_FORMATS[{key!r}] = {{'values': {{{pairs}}}, 'other': {other_label!r}}}")
             else:
-                ranges = ", ".join(
-                    f"({self._num_lit(lo)}, {self._num_lit(hi)}, {lbl!r})" for lo, hi, lbl in entries
-                )
+                parts = []
+                for item in entries:
+                    if len(item) == 5:
+                        lo, hi, lbl, lo_excl, hi_excl = item
+                        parts.append(
+                            f"({self._num_lit(lo)}, {self._num_lit(hi)}, {lbl!r}, {bool(lo_excl)!r}, {bool(hi_excl)!r})"
+                        )
+                    else:
+                        lo, hi, lbl = item
+                        parts.append(f"({self._num_lit(lo)}, {self._num_lit(hi)}, {lbl!r})")
+                ranges = ", ".join(parts)
                 self.w(f"_r.USER_FORMATS[{key!r}] = {{'ranges': [{ranges}], 'other': {other_label!r}}}")
 
     def _gen_proc_sql(self, proc: A.ProcStep):
@@ -1265,13 +1283,52 @@ class CodeGen:
         dsname = self._resolve_ds(proc)
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
-        self.w("if _TITLE: print(_TITLE)")
+        self.w("for _t in _TITLES:")
+        self.indent += 1
+        self.w("if _t: print(_t)")
+        self.indent -= 1
         var_clause = self._clause(proc, "var")
+        id_clause = self._clause(proc, "id")
+        by_clause = self._clause(proc, "by")
+        id_cols_all = [n for n, _ in id_clause] if id_clause else []
+        by_cols = [n for n, _ in by_clause] if by_clause else []
+        id_only_cols = []
+        by_only_cols = []
         if var_clause:
             cols = [n for n, _ in var_clause]
-            self.w(f"_df = _df[[c for c in {cols!r} if c in _df.columns]]")
-        self.w(f"_fmts = _FMT.get({dsname!r}, {{}})")
-        self.w("_pf = _df.copy()")
+            # An ID or BY variable is shown (as the row label, or the
+            # "--- var=value ---" group header) even if it wasn't
+            # requested via VAR -- both must survive this column
+            # subsetting, so pull them along here and drop them again
+            # after indexing/grouping below.
+            id_only_cols = [c for c in id_cols_all if c not in cols]
+            by_only_cols = [c for c in by_cols if c not in cols and c not in id_only_cols]
+            keep_cols = cols + id_only_cols + by_only_cols
+            self.w(f"_req = {cols!r}")
+            self.w("_miss = [c for c in _req if c not in _df.columns]")
+            self.w("if _miss: print(f\"warning: PROC PRINT VAR not found: {', '.join(_miss)}\")")
+            self.w(f"_df = _df[[c for c in {keep_cols!r} if c in _df.columns]]")
+        self.w(f"_fmts = dict(_FMT.get({dsname!r}, {{}}))")
+        fmt_clause = self._clause(proc, "format")
+        if fmt_clause:
+            inline = {v: f for v, f in fmt_clause}
+            self.w(f"_fmts.update({inline!r})")
+            self.w(f"_FMT[{dsname!r}] = dict(_fmts)")
+        if by_cols:
+            self.w(f"_bycols = [c for c in {by_cols!r} if c in _df.columns]")
+            self.w(f"_bymiss = [c for c in {by_cols!r} if c not in _df.columns]")
+            self.w("if _bymiss: print(f\"warning: PROC PRINT BY not found: {', '.join(_bymiss)}\")")
+            self.w("if _bycols: _df = _df.sort_values(by=_bycols, kind='mergesort').reset_index(drop=True)")
+        sum_clause = self._clause(proc, "sum")
+        sum_vars = []
+        if isinstance(sum_clause, str):
+            sum_vars = [t for t in re.split(r"[\s,;]+", sum_clause.strip().lower()) if t and t != "sum"]
+        # Factor the per-table rendering into a helper so BY groups can
+        # reuse it (each BY value gets its own table + subtotal).
+        self.w("def _print_pf(_pf):")
+        self.indent += 1
+        if by_only_cols:
+            self.w(f"_pf = _pf.drop(columns=[c for c in {by_only_cols!r} if c in _pf.columns])")
         self.w("for _c, _fmt in _fmts.items():")
         self.indent += 1
         self.w("if _c in _pf.columns:")
@@ -1279,19 +1336,15 @@ class CodeGen:
         self.w("_pf[_c] = _pf[_c].map(lambda v: _r.apply_format(v, _fmt))")
         self.indent -= 1
         self.indent -= 1
-        sum_clause = self._clause(proc, "sum")
-        sum_vars = []
-        if isinstance(sum_clause, str):
-            sum_vars = [t for t in re.split(r"[\s,;]+", sum_clause.strip().lower()) if t and t != "sum"]
         if not proc.options.get("noobs"):
-            id_clause = self._clause(proc, "id")
-            id_cols = [n for n, _ in id_clause] if id_clause else []
-            if id_cols:
-                self.w(f"_idcols = [c for c in {id_cols!r} if c in _pf.columns]")
+            if id_cols_all:
+                self.w(f"_idcols = [c for c in {id_cols_all!r} if c in _pf.columns]")
                 self.w("if _idcols:")
                 self.indent += 1
                 self.w("_pf.index = _pf[_idcols].astype(str).agg(' '.join, axis=1)")
                 self.w("_pf.index.name = None")
+                if id_only_cols:
+                    self.w(f"_pf = _pf.drop(columns=[c for c in {id_only_cols!r} if c in _pf.columns])")
                 self.indent -= 1
                 self.w("else:")
                 self.indent += 1
@@ -1321,7 +1374,28 @@ class CodeGen:
             self.w("print(_pf.to_string(index=False))")
         else:
             self.w("print(_pf.to_string())")
-        self.w("if _FOOTNOTE: print(_FOOTNOTE)")
+        self.indent -= 1
+        if by_cols:
+            self.w("if _bycols:")
+            self.indent += 1
+            self.w("for _bkey, _bdf in _df.groupby(_bycols, dropna=False):")
+            self.indent += 1
+            self.w("_bkey = _bkey if isinstance(_bkey, tuple) else (_bkey,)")
+            self.w("_blab = ', '.join(f'{c}={_r.sas_str(v)}' for c, v in zip(_bycols, _bkey))")
+            self.w("print(f'--- {_blab} ---')")
+            self.w("_print_pf(_bdf.copy())")
+            self.indent -= 1
+            self.indent -= 1
+            self.w("else:")
+            self.indent += 1
+            self.w("_print_pf(_df.copy())")
+            self.indent -= 1
+        else:
+            self.w("_print_pf(_df.copy())")
+        self.w("for _f in _FOOTNOTES:")
+        self.indent += 1
+        self.w("if _f: print(_f)")
+        self.indent -= 1
 
     def _gen_proc_sort(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

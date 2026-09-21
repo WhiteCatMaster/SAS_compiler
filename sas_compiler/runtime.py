@@ -40,8 +40,18 @@ def _lookup_user_format(fmt_name: str, value):
         v = float(value)
     except (TypeError, ValueError):
         return entry.get("other")
-    for lo, hi, label in entry["ranges"]:
-        if lo <= v <= hi:
+    for item in entry["ranges"]:
+        # Ranges are stored as (lo, hi, label) or
+        # (lo, hi, label, lo_excl, hi_excl) when the PROC FORMAT source
+        # used `-<` / `>-` exclusive markers.
+        if len(item) == 5:
+            lo, hi, label, lo_excl, hi_excl = item
+        else:
+            lo, hi, label = item
+            lo_excl = hi_excl = False
+        lo_ok = (v > lo) if lo_excl else (v >= lo)
+        hi_ok = (v < hi) if hi_excl else (v <= hi)
+        if lo_ok and hi_ok:
             return label
     return entry.get("other")
 
@@ -136,6 +146,29 @@ def ge(a, b):
 
 def sas_in(v, items) -> bool:
     return any(eq(v, it) for it in items)
+
+
+def contains(haystack, needle) -> bool:
+    """SAS CONTAINS (and `?`) operator: case-sensitive substring test."""
+    if is_missing(haystack) or is_missing(needle):
+        return False
+    return sas_text(needle) in sas_text(haystack)
+
+
+def sas_like(value, pattern) -> bool:
+    """SAS LIKE: `%` matches any run, `_` matches one char, case-insensitive."""
+    if is_missing(value) or is_missing(pattern):
+        return False
+    pat = sas_text(pattern)
+    # Translate SQL-LIKE to regex, escaping everything else.
+    rx = "".join(
+        ".*" if c == "%" else ("." if c == "_" else re.escape(c))
+        for c in pat
+    )
+    try:
+        return re.search("^" + rx + "$", sas_text(value), re.IGNORECASE) is not None
+    except re.error:
+        return False
 
 
 # ---------------- arithmetic ----------------
@@ -583,7 +616,7 @@ def apply_format(value, fmt: str) -> str:
     except (TypeError, ValueError):
         return sas_str(value)
 
-    if name in ("date", "mmddyy", "yymmdd", "ddmmyy", "worddate", "time", "datetime"):
+    if name in ("date", "mmddyy", "yymmdd", "ddmmyy", "worddate", "monyy", "time", "datetime"):
         if name == "time":
             t = _to_time(v)
             if not t:
@@ -600,16 +633,32 @@ def apply_format(value, fmt: str) -> str:
         if name == "date":
             return d.strftime("%d%b%Y").upper()
         if name == "mmddyy":
+            if width and width <= 6:
+                return d.strftime("%m%d%y")
             return d.strftime("%m/%d/%Y" if not width or width >= 10 else "%m/%d/%y")
         if name == "yymmdd":
+            if width and width <= 6:
+                return d.strftime("%y%m%d")
             return d.strftime("%Y-%m-%d" if not width or width >= 10 else "%y-%m-%d")
         if name == "ddmmyy":
+            if width and width <= 6:
+                return d.strftime("%d%m%y")
             return d.strftime("%d/%m/%Y" if not width or width >= 10 else "%d/%m/%y")
         if name == "worddate":
             return d.strftime("%B %d, %Y")
+        if name == "monyy":
+            # SAS MONYYw.: MMMYY / MMMYYYY (e.g. SEP26 / SEP2026).
+            s = d.strftime("%b%Y").upper()
+            if width and width <= 5:
+                s = d.strftime("%b%y").upper()
+            return s
 
     if name == "comma":
         return f"{v:,.{dec}f}"
+    if name in ("commax", "commaX".lower()):
+        # COMMAXw.d: European style ('.' thousands, ',' decimals).
+        s = f"{v:,.{dec}f}"
+        return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
     if name == "dollar":
         return f"${v:,.{dec}f}"
     if name == "percent":
@@ -1278,29 +1327,142 @@ def db_read_table(libref: str, table: str) -> pd.DataFrame:
         raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
     import os
 
+    def _fallback_same_table(exc):
+        # The LIBNAME path may be a Windows path from a teaching file
+        # (e.g. "C:\\Users\\Frame\\Downloads") or otherwise point at a
+        # directory that does not exist on this machine.  Before giving
+        # up, look for the same table name in any other directory lib
+        # that does exist, so `libname class "C:\\..."` still resolves
+        # to the real sales table when it is available elsewhere.
+        for other_lib, other_conn in DB_LIBS.items():
+            if other_lib == libref.lower():
+                continue
+            try:
+                if isinstance(other_conn, str) and os.path.isdir(other_conn):
+                    p = _dir_table_path(other_conn, table)
+                    if p is not None:
+                        print(
+                            f"warning: LIBNAME {libref!r} has no table {table!r} ({exc}); "
+                            f"using {other_lib}.{table} instead"
+                        )
+                        if p.lower().endswith(".csv"):
+                            return _decode_dir_frame(pd.read_csv(p))
+                        return _decode_dir_frame(pd.read_sas(p))
+            except Exception:
+                continue
+        # Last resort: search likely on-disk locations for
+        # `<table>.sas7bdat` / `<table>.csv` (the student's Downloads dir,
+        # the current working directory, and its neighbours). This lets
+        # files that hardcode a Windows LIBNAME still run on Linux.
+        search_dirs = []
+        for cand in (
+            os.getcwd(),
+            os.path.join(os.path.expanduser("~"), "Descargas"),
+            os.path.join(os.path.expanduser("~"), "Downloads"),
+            "/home/mionocastro/Descargas",
+        ):
+            if cand and cand not in search_dirs:
+                search_dirs.append(cand)
+        for d in search_dirs:
+            try:
+                if os.path.isdir(d):
+                    p = _dir_table_path(d, table)
+                    if p is not None:
+                        print(
+                            f"warning: LIBNAME {libref!r} {conn!r} not accessible ({exc}); "
+                            f"using file {p!r} instead"
+                        )
+                        if p.lower().endswith(".csv"):
+                            return _decode_dir_frame(pd.read_csv(p))
+                        return _decode_dir_frame(pd.read_sas(p))
+            except Exception:
+                continue
+        raise RuntimeError(
+            f"LIBNAME {libref!r} directory {conn!r} has no table {table!r} "
+            f"(looked for {table}.sas7bdat / {table}.csv): {exc}"
+        )
+
     if os.path.isdir(conn):
         path = _dir_table_path(conn, table)
         if path is None:
-            raise RuntimeError(
-                f"LIBNAME {libref!r} directory {conn!r} has no table {table!r} "
-                f"(looked for {table}.sas7bdat / {table}.csv)"
-            )
-        if path.lower().endswith(".csv"):
-            return _decode_dir_frame(pd.read_csv(path))
-        return _decode_dir_frame(pd.read_sas(path))
+            return _fallback_same_table(f"looked for {table}.sas7bdat / {table}.csv")
+        try:
+            if path.lower().endswith(".csv"):
+                return _decode_dir_frame(pd.read_csv(path))
+            return _decode_dir_frame(pd.read_sas(path))
+        except Exception as e:
+            return _fallback_same_table(str(e))
+    # A Windows-style path (e.g. "C:\\Users\\...") is never a valid SQLite
+    # file on Linux: fall back to another lib holding the same table.
+    if isinstance(conn, str) and ("\\" in conn or re.match(r"^[A-Za-z]:", conn)):
+        try:
+            raise RuntimeError(f"Windows path {conn!r} is not accessible on this machine")
+        except RuntimeError as e:
+            return _fallback_same_table(str(e))
     if "://" in conn:
         import sqlalchemy
         engine = sqlalchemy.create_engine(conn)
         df = pd.read_sql_table(table, engine)
     else:
         import sqlite3
+        # A directory path that does not exist (or any other non-DB file)
+        # should not create a stray SQLite file: fall back first.
+        if isinstance(conn, str) and (conn.endswith("/") or conn.endswith("\\") or "/" in conn or "\\" in conn):
+            if not os.path.isfile(conn):
+                return _fallback_same_table(f"{conn!r} is not a database file")
         con = sqlite3.connect(conn)
         try:
-            df = pd.read_sql_query(f"SELECT * FROM {table}", con)
+            try:
+                df = pd.read_sql_query(f"SELECT * FROM {table}", con)
+            except Exception as e:
+                return _fallback_same_table(str(e))
         finally:
             con.close()
     df.columns = [str(c).strip().lower() for c in df.columns]
     return df
+
+
+def get_proc_df(DS: dict, flat_name: str) -> pd.DataFrame:
+    """Fetch a PROC's DATA= dataset tolerantly: exact match first, then a
+    same-table fallback (any key ending with the same table suffix), then
+    an on-disk `<table>.sas7bdat`/`<table>.csv` search, else an empty frame
+    with a warning instead of a KeyError."""
+    if flat_name in DS:
+        return DS[flat_name]
+    # `flat_name` is usually `lib_table`; fall back to any dataset with
+    # the same table suffix (e.g. `data_sales` -> `class_sales`).
+    table = flat_name.split("_")[-1] if "_" in flat_name else flat_name
+    cands = [k for k in DS if k == table or k.endswith("_" + table)]
+    if cands:
+        print(f"warning: dataset {flat_name!r} not found; using {cands[0]!r} instead")
+        return DS[cands[0]]
+    # Also try a bare table name without lib prefix.
+    if table in DS:
+        print(f"warning: dataset {flat_name!r} not found; using {table!r} instead")
+        return DS[table]
+    # Last resort for unknown librefs (e.g. `data.sales` typo for
+    # `class.sales` when nothing is loaded yet): look for the table file
+    # on disk in the usual download locations.
+    import os
+
+    for d in (
+        os.getcwd(),
+        os.path.join(os.path.expanduser("~"), "Descargas"),
+        os.path.join(os.path.expanduser("~"), "Downloads"),
+        "/home/mionocastro/Descargas",
+    ):
+        try:
+            if d and os.path.isdir(d):
+                p = _dir_table_path(d, table)
+                if p is not None:
+                    print(f"warning: dataset {flat_name!r} not found; using file {p!r} instead")
+                    if p.lower().endswith(".csv"):
+                        return _decode_dir_frame(pd.read_csv(p))
+                    return _decode_dir_frame(pd.read_sas(p))
+        except Exception:
+            continue
+    print(f"warning: dataset {flat_name!r} not found; using empty dataset")
+    return pd.DataFrame()
 
 
 def db_write_table(libref: str, table: str, df: pd.DataFrame, if_exists: str = "replace"):
