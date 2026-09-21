@@ -92,7 +92,11 @@ default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `UNIVARIATE` (moments, mode, quantiles, extreme observations —
 printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
 `DESCENDING`, average-rank ties), `FORMAT` (see below), `GLM`, `FASTCLUS`
-(see below), and `SQL` — SQL statements are executed almost verbatim
+(see below), `SGPLOT` (`SCATTER`, `SERIES`, `VBAR` with or without
+`RESPONSE=`, `HISTOGRAM` — multiple plot statements overlay onto one
+figure; saved to a PNG via `OUT="path.png"`, or a default
+`sgplot_N.png` if omitted, since there's no interactive display here),
+and `SQL` — SQL statements are executed almost verbatim
 against duckdb with all current datasets registered as views, so most
 standard SQL (joins, GROUP BY/HAVING, window functions, CTEs) works
 without any special-casing here.
