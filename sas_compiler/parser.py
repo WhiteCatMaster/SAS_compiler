@@ -234,6 +234,17 @@ class Parser:
             return None
         kw = t.value.lower()
 
+        # A bare HASH-object method call used as its own statement, e.g.
+        # `h.definekey("id");` or `h.add();` (as opposed to `rc = h.find();`,
+        # which is an ordinary assignment whose RHS is parsed as an
+        # expression -- see parse_atom's matching check).
+        if (self.peek(1).type == TokType.OP and self.peek(1).value == "."
+                and self.peek(2).type == TokType.IDENT and self.peek(3).type == TokType.LPAREN):
+            hashname = self.advance().value.lower()
+            call = self._parse_hash_call_tail(hashname)
+            self.skip_to_semi()
+            return A.ExprStmt(expr=call)
+
         dispatch = {
             "set": self._parse_set,
             "merge": self._parse_merge,
@@ -256,11 +267,54 @@ class Parser:
             "cards": self._parse_datalines,
             "delete": self._parse_delete,
             "return": self._parse_return,
+            "declare": self._parse_declare_hash,
         }
         if kw in dispatch:
             return dispatch[kw]()
 
         return self._parse_assignment_or_sum()
+
+    def _parse_named_arg_list(self) -> list:
+        """Parse a parenthesized argument list where each argument is
+        either `name: expr` or a bare `expr` -- used for HASH object
+        constructor/method calls, e.g. `(dataset: "lookup")` or
+        `(key: id, key: region)`. Returns [(argname_or_None, Expr), ...]."""
+        self.advance()  # '('
+        args = []
+        while self.peek().type != TokType.RPAREN and self.peek().type != TokType.EOF:
+            argname = None
+            if (self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP
+                    and self.peek(1).value == ":"):
+                argname = self.advance().value.lower()
+                self.advance()  # ':'
+            expr = self.parse_expr()
+            args.append((argname, expr))
+            if self.peek().type == TokType.COMMA:
+                self.advance()
+        if self.peek().type == TokType.RPAREN:
+            self.advance()
+        return args
+
+    def _parse_hash_call_tail(self, hashname: str) -> A.HashMethodCall:
+        """Assumes `hashname` (the leading IDENT) is already consumed and
+        the cursor sits at the following '.': parses `.method(args)`."""
+        self.advance()  # '.'
+        method = self.advance().value.lower()
+        args = []
+        if self.peek().type == TokType.LPAREN:
+            args = self._parse_named_arg_list()
+        return A.HashMethodCall(hashname=hashname, method=method, args=args)
+
+    def _parse_declare_hash(self):
+        self.advance()  # 'declare'
+        if self.is_kw("hash"):
+            self.advance()
+        hashname = self.advance().value.lower()
+        args = []
+        if self.peek().type == TokType.LPAREN:
+            args = self._parse_named_arg_list()
+        self.skip_to_semi()
+        return A.DeclareHashStmt(hashname=hashname, args=args)
 
     # ---- individual statement parsers ----
     def _parse_set(self):
@@ -878,6 +932,9 @@ class Parser:
                 var = self.advance().value.lower()
                 return A.DotVar(kind=name_l, var=var)
             self.advance()
+            if (self.peek().type == TokType.OP and self.peek().value == "."
+                    and self.peek(1).type == TokType.IDENT and self.peek(2).type == TokType.LPAREN):
+                return self._parse_hash_call_tail(name_l)
             if self.peek().type == TokType.LPAREN:
                 self.advance()
                 if name_l in ("put", "input"):
