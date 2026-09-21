@@ -92,7 +92,12 @@ default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `UNIVARIATE` (moments, mode, quantiles, extreme observations —
 printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
 `DESCENDING`, average-rank ties), `FORMAT` (see below), `GLM`, `FASTCLUS`
-(see below), and `SQL` — SQL statements are executed almost verbatim
+(see below), `REPORT` (`COLUMN`/`DEFINE ... / GROUP|ANALYSIS stat|DISPLAY`
+— grouped-and-summarized when a `GROUP` and an `ANALYSIS` variable are
+both defined, else a plain listing of the `COLUMN` variables),
+`TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via
+`SUM`/`MEAN`/`N`, with an optional `OUT=`), and `SQL` — SQL statements
+are executed almost verbatim
 against duckdb with all current datasets registered as views, so most
 standard SQL (joins, GROUP BY/HAVING, window functions, CTEs) works
 without any special-casing here.
@@ -168,7 +173,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   stored value.
 - PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`SQL` raise a clear
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`SQL` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 

@@ -1006,6 +1006,32 @@ class Parser:
                 if raw.endswith(";"):
                     raw = raw[:-1]
                 clauses.append(("model", raw.strip()))
+            elif name == "report" and ckw == "column":
+                self.advance()
+                names = []
+                while self.peek().type == TokType.IDENT:
+                    names.append(self.advance().value.lower())
+                clauses.append(("column", names))
+                self.skip_to_semi()
+            elif name == "report" and ckw == "define":
+                self.advance()
+                var = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
+                mods = []
+                if self.peek().type == TokType.OP and self.peek().value == "/":
+                    self.advance()
+                    while self.peek().type == TokType.IDENT:
+                        mods.append(self.advance().value.lower())
+                clauses.append(("define", (var, mods)))
+                self.skip_to_semi()
+            elif name == "tabulate" and ckw in ("table", "tables"):
+                self.advance()
+                start = self.peek().pos
+                self.skip_to_semi()
+                end_tok_pos = self.peek().pos
+                raw = self.source[start:end_tok_pos].strip()
+                if raw.endswith(";"):
+                    raw = raw[:-1]
+                clauses.append(("table", raw.strip()))
             else:
                 start = self.peek().pos
                 self.skip_to_semi()

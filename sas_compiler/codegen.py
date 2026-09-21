@@ -688,6 +688,10 @@ class CodeGen:
             self._gen_proc_glm(proc)
         elif name == "fastclus":
             self._gen_proc_fastclus(proc)
+        elif name == "report":
+            self._gen_proc_report(proc)
+        elif name == "tabulate":
+            self._gen_proc_tabulate(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -1134,6 +1138,126 @@ class CodeGen:
         if out:
             self.w(f"_DS[{out!r}] = _clustered")
             self.last_ds_name = out
+
+    # ---- PROC REPORT ----
+    _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
+    _REPORT_STAT_METHOD = {
+        "sum": "sum", "mean": "mean", "n": "count",
+        "min": "min", "max": "max", "std": "std", "median": "median",
+    }
+
+    @classmethod
+    def _classify_report_define(cls, mods: list) -> tuple:
+        """Return (usage, stat) for a DEFINE var / mod1 mod2 ...; clause.
+        usage is 'group', 'analysis', or 'display' (SAS's default)."""
+        modset = set(mods)
+        if "group" in modset:
+            return ("group", None)
+        if "display" in modset:
+            return ("display", None)
+        stat = next((m for m in mods if m in cls._REPORT_STAT_WORDS), None)
+        if "analysis" in modset or stat:
+            return ("analysis", stat or "sum")
+        return ("display", None)
+
+    def _gen_proc_report(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        column_clause = self._clause(proc, "column")
+        if not column_clause:
+            raise CodegenError("PROC REPORT requires a COLUMN statement")
+        define_map = {}
+        for k, v in proc.clauses:
+            if k == "define":
+                var, mods = v
+                define_map[var] = mods
+
+        group_vars, analysis_vars, display_vars = [], [], []
+        for col in column_clause:
+            usage, stat = self._classify_report_define(define_map.get(col, []))
+            if usage == "group":
+                group_vars.append(col)
+            elif usage == "analysis":
+                analysis_vars.append((col, stat))
+            else:
+                display_vars.append(col)
+
+        self.w(f"_df = _DS[{dsname!r}]")
+        if group_vars and analysis_vars:
+            self.w("_rows = []")
+            self.w(f"for _key, _g in _df.groupby({group_vars!r}, dropna=False):")
+            self.indent += 1
+            self.w("_key = _key if isinstance(_key, tuple) else (_key,)")
+            self.w(f"_row = dict(zip({group_vars!r}, _key))")
+            for var, stat in analysis_vars:
+                method = self._REPORT_STAT_METHOD[stat]
+                self.w(f"_row[{var!r}] = _g[{var!r}].{method}()")
+            self.w("_rows.append(_row)")
+            self.indent -= 1
+            self.w("_report_df = pd.DataFrame(_rows)")
+            self.w("print(_report_df.to_string(index=False))")
+        else:
+            self.w(f"_report_df = _df[{column_clause!r}]")
+            self.w("_pf = _report_df.copy()")
+            self.w("_pf.index = range(1, len(_pf) + 1)")
+            self.w("_pf.index.name = 'Obs'")
+            self.w("print(_pf.to_string())")
+
+    # ---- PROC TABULATE ----
+    _TABULATE_STATS = {"sum": "sum", "mean": "mean", "n": "count"}
+
+    @classmethod
+    def _parse_tabulate_axis(cls, text: str) -> tuple:
+        """Parse one side of a TABLE row, col statement: a plain class var
+        ('rowvar'), or class-var(s) chained with an analysis var and a
+        trailing stat keyword via '*' ('colvar*analysisvar*mean'). Returns
+        (class_vars, analysis_var_or_None, stat_or_None). Only this shape
+        is supported -- no nested groupings within one axis, no multiple
+        stats per cell, no PCTN/other TABULATE-specific statistics."""
+        parts = [p.strip().lower() for p in text.split("*") if p.strip()]
+        stat = None
+        if parts and parts[-1] in cls._TABULATE_STATS:
+            stat = parts.pop()
+        analysis_var = None
+        if stat and parts:
+            analysis_var = parts.pop()
+        return parts, analysis_var, stat
+
+    def _gen_proc_tabulate(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        table_raw = self._clause(proc, "table")
+        if not table_raw:
+            raise CodegenError("PROC TABULATE requires a TABLE statement")
+        if "," in table_raw:
+            row_text, col_text = table_raw.split(",", 1)
+        else:
+            row_text, col_text = table_raw, ""
+        row_classes, row_var, row_stat = self._parse_tabulate_axis(row_text)
+        col_classes, col_var, col_stat = self._parse_tabulate_axis(col_text)
+        analysis_var = row_var or col_var
+        stat = row_stat or col_stat or "sum"
+        if not analysis_var:
+            var_clause = self._clause(proc, "var")
+            analysis_var = var_clause[0][0] if var_clause else None
+        if not analysis_var:
+            raise CodegenError(
+                "PROC TABULATE: could not determine the analysis variable "
+                "(add a VAR statement, or var*stat on one TABLE axis)"
+            )
+        aggfunc = self._TABULATE_STATS.get(stat, "sum")
+
+        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(
+            f"_piv = pd.pivot_table(_df, values={analysis_var!r}, "
+            f"index={row_classes!r} or None, columns={col_classes!r} or None, "
+            f"aggfunc={aggfunc!r})"
+        )
+        self.w("_piv.columns.name = None")
+        self.w("print(_piv.to_string())")
+        out = proc.options.get("out")
+        if isinstance(out, str):
+            out_name = normalize_dsname(out)
+            self.w(f"_DS[{out_name!r}] = _piv.reset_index()")
+            self.last_ds_name = out_name
 
     def _gen_proc_rank(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
