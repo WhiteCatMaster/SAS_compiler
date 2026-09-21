@@ -188,10 +188,19 @@ way via `FORMAT var fmtname.` or `PUT(var, fmtname.)`.
 
 These are deliberate scope cuts, not oversights — real SAS is enormous:
 
-- **PDV typing** is inferred heuristically (assignment of a string
-  literal or a char-returning function marks a variable as character);
-  an uninitialized character variable read before any assignment may
-  come back as missing-numeric instead of blank.
+- **PDV typing**: a `SET`/`MERGE`/`UPDATE` source column's real dtype
+  (checked live against the actual source DataFrame at run time, not
+  guessed) now decides whether that name defaults to blank instead of
+  numeric-missing before it's ever assigned — closing the common case
+  where a `MERGE`/`UPDATE` source is absent for the first BY-group
+  processed. An explicit static declaration (`LENGTH`/`ARRAY` numeric)
+  still wins if it conflicts with the dtype guess. What's left
+  heuristic-only: a variable with **no** SET/MERGE/UPDATE source and
+  **no** static evidence either way (only ever produced by computation
+  inside the step) still relies on finding a string-literal or
+  char-returning-function assignment somewhere in the step; one that's
+  read before being set on every code path it could reach can still
+  come back missing-numeric instead of blank.
 - **MERGE** handles one-to-one and one-to-many BY-merges correctly.
   When *more than one* input dataset has multiple rows for the same BY
   value (many-to-many merges, which SAS itself discourages as
