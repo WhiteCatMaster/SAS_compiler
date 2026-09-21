@@ -184,6 +184,8 @@ class CodeGen:
                 fnames.append(self.gen_libname_step(step))
             elif isinstance(step, A.TitleStmt):
                 fnames.append(self.gen_title_step(step))
+            elif isinstance(step, A.OdsStmt):
+                fnames.append(self.gen_ods_step(step))
         self.w("")
         for fn in fnames:
             self.w(f"{fn}()")
@@ -593,6 +595,18 @@ class CodeGen:
         var = "_FOOTNOTE" if stmt.kind == "footnote" else "_TITLE"
         self.w(f"global {var}")
         self.w(f"{var} = {stmt.text!r}")
+        self.indent -= 1
+        return fname
+
+    def gen_ods_step(self, stmt: A.OdsStmt) -> str:
+        self.step_idx += 1
+        fname = f"_step_{self.step_idx}"
+        self.w(f"def {fname}():")
+        self.indent += 1
+        if stmt.action == "open":
+            self.w(f"_r.ods_html_open({stmt.path!r})")
+        else:
+            self.w("_r.ods_html_close()")
         self.indent -= 1
         return fname
 

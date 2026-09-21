@@ -7,9 +7,12 @@ calls into this module.
 """
 from __future__ import annotations
 
+import atexit
 import csv
+import html as _html
 import math
 import re
+import sys
 from datetime import date, timedelta
 
 import pandas as pd
@@ -1671,3 +1674,73 @@ class SasHIter:
 
     def prev(self, pdv: dict) -> float:
         return self._load(pdv, len(self._items()) - 1 if self.idx is None else self.idx - 1)
+
+
+# ---------------- ODS HTML ----------------
+class _OdsHtmlCapture:
+    """A stdout-like buffer used while ODS HTML is open. Everything the
+    generated code prints (PROC output, PUT, ...) is collected here and
+    wrapped into one HTML document on close -- a single monospace <pre>
+    block, not reconstructed per-PROC <table> markup, so rendering is
+    always correct even though it isn't styled like real ODS HTML."""
+
+    def __init__(self):
+        self.buffer = []
+
+    def write(self, text):
+        self.buffer.append(text)
+        return len(text)
+
+    def flush(self):
+        pass
+
+
+_ODS_HTML_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
+
+
+def ods_html_open(path):
+    """ODS HTML FILE="path"; -- start capturing everything printed until
+    ods_html_close(). Re-opening while already open closes (and writes)
+    the previous destination first, rather than losing it silently."""
+    if _ODS_HTML_STATE["active"]:
+        ods_html_close()
+    real_stdout = sys.stdout
+    capture = _OdsHtmlCapture()
+    sys.stdout = capture
+    _ODS_HTML_STATE.update(active=True, path=path, capture=capture, real_stdout=real_stdout)
+
+
+def ods_html_close():
+    """ODS HTML CLOSE; -- restore stdout and write the accumulated output
+    to the destination file. A no-op if nothing is currently open."""
+    if not _ODS_HTML_STATE["active"]:
+        return
+    capture = _ODS_HTML_STATE["capture"]
+    path = _ODS_HTML_STATE["path"]
+    sys.stdout = _ODS_HTML_STATE["real_stdout"]
+    _ODS_HTML_STATE.update(active=False, path=None, capture=None, real_stdout=None)
+
+    body = _html.escape("".join(capture.buffer))
+    doc = (
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">"
+        "<title>SAS Output</title></head>\n"
+        '<body><pre style="font-family: monospace; white-space: pre-wrap;">'
+        f"{body}</pre></body></html>\n"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(doc)
+
+
+def _ods_html_atexit_restore():
+    """Safety net: if the process exits (e.g. an unhandled exception in a
+    step between ODS HTML FILE= and ODS HTML CLOSE;) while still
+    redirected, restore stdout and flush whatever was captured rather
+    than silently swallowing output or leaving stdout broken."""
+    if _ODS_HTML_STATE["active"]:
+        try:
+            ods_html_close()
+        except Exception:
+            pass
+
+
+atexit.register(_ods_html_atexit_restore)
