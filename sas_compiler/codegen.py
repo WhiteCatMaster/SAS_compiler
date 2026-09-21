@@ -196,15 +196,20 @@ class CodeGen:
             parts.append(f"{term} * {mult}" if mult != 1 else term)
         return " + ".join(parts)
 
-    def generate(self, prog: A.Program) -> str:
+    def generate(self, prog: A.Program, nested: bool = False) -> str:
         self.w("import sas_compiler.runtime as _r")
         self.w("import pandas as pd")
         self.w("import duckdb")
-        self.w("_DS = {}")
-        self.w("_FMT = {}")
-        self.w("_LBL = {}")
-        self.w("_TITLES = [''] * 10")
-        self.w("_FOOTNOTES = [''] * 10")
+        if not nested:
+            # `nested=True` (used by CALL EXECUTE's runtime drain) skips
+            # these: the caller injects the SAME dict/list objects into
+            # the exec() namespace so the queued snippet shares the
+            # outer program's WORK library instead of getting a fresh one.
+            self.w("_DS = {}")
+            self.w("_FMT = {}")
+            self.w("_LBL = {}")
+            self.w("_TITLES = [''] * 10")
+            self.w("_FOOTNOTES = [''] * 10")
         self.w("")
         fnames = []
         for step in prog.steps:
@@ -226,6 +231,12 @@ class CodeGen:
         self.w("")
         for fn in fnames:
             self.w(f"{fn}()")
+            # CALL EXECUTE queues raw SAS text to run after the current
+            # step finishes and before the next one; drain it here.
+            self.w("if _r._EXECUTE_QUEUE:")
+            self.indent += 1
+            self.w("_r.drain_execute_queue(_DS, _FMT, _LBL, _TITLES, _FOOTNOTES)")
+            self.indent -= 1
         return "\n".join(self.lines) + "\n"
 
     # ---------------- expressions ----------------
@@ -668,6 +679,10 @@ class CodeGen:
             for a in s.args:
                 if isinstance(a, A.Var):
                     self.w(f"pdv[{a.name!r}] = _r.MISSING")
+            return
+        if name == "execute":
+            a0 = s.args[0]
+            self.w(f"_r.call_execute({self.gen_expr(a0)})")
             return
         self.w(f"pass  # unsupported: call {name}(...)")
 
@@ -2289,5 +2304,5 @@ class CodeGen:
         self.last_ds_name = base
 
 
-def generate(prog: A.Program) -> str:
-    return CodeGen().generate(prog)
+def generate(prog: A.Program, nested: bool = False) -> str:
+    return CodeGen().generate(prog, nested=nested)

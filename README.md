@@ -85,7 +85,10 @@ and `DO OVER` (flat row-major iteration for multi-dim arrays),
 correct `CONTINUE` semantics inside iterative and `DO UNTIL` loops),
 `UPDATE master trans; BY ...;` (non-missing transaction values overlay the
 master, one output row per BY group), `OUTPUT` (single or multiple output datasets),
-`DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
+`DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`/
+`CALL EXECUTE` (queued SAS source runs after the current step, before the
+next one, sharing the same WORK library -- the classic "generate one code
+block per driver-dataset row" idiom),
 `INPUT`/`DATALINES`/`CARDS`, `INFILE "path" [DLM=..] [DSD] [FIRSTOBS=n]
 [OBS=n]` for external text files (short lines padded MISSOVER-style),
 `FILE "path" [MOD]` redirecting `PUT` to a file (`FILE LOG`/`PRINT` stay on
@@ -238,6 +241,14 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   expansion is a complete pass that finishes before the DATA step ever
   runs, it cannot feed back into `%IF`/`%DO` control flow the way real
   SAS's interleaved macro/DATA-step execution can.
+- **`CALL EXECUTE`** re-runs the full macro-expand + parse + codegen
+  pipeline on every queued snippet at runtime, so it is not free the way
+  real SAS's more integrated execution is -- fine for the typical
+  "one small block per driver-dataset row" idiom, but not meant for
+  queuing thousands of snippets in a tight loop. Queued text is plain
+  SAS source, not a resolved macro call, so it cannot itself invoke
+  `%macro` control flow beyond what the `DATA _NULL_` step producing it
+  already computed into the string.
 - The **HASH object** covers single- or multi-key lookups built from a
   `DATASET:` or grown via `.ADD()`, `MULTIDATA:'Y'` (multiple data rows
   per key), sequential `.FIRST()`/`.NEXT()`/`.PREV()`/`.LAST()` walks,

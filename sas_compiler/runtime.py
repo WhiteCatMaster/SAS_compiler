@@ -22,6 +22,48 @@ SAS_EPOCH = date(1960, 1, 1)
 
 MACRO_VARS: dict = {}
 
+# CALL EXECUTE queue: strings of raw SAS source queued by DATA step CALL
+# EXECUTE(...) statements, drained (compiled + run) right after the
+# currently-running step finishes, before the next step -- matching real
+# SAS's "queued statements execute at the end of the current step" timing.
+_EXECUTE_QUEUE: list = []
+
+
+def call_execute(text) -> None:
+    """CALL EXECUTE(text) -- queue a string of SAS source to run after the
+    current step. Draining happens in drain_execute_queue(), invoked by the
+    generated top-level program after each step call."""
+    _EXECUTE_QUEUE.append(str(text))
+
+
+def drain_execute_queue(_DS, _FMT, _LBL, _TITLES=None, _FOOTNOTES=None) -> None:
+    """Compile and run every SAS snippet queued by CALL EXECUTE, in the
+    order queued, sharing the SAME _DS/_FMT/_LBL dicts (and _TITLES/
+    _FOOTNOTES lists) as the caller -- so datasets created by queued code
+    are visible to the rest of the program and vice versa, matching real
+    SAS's shared WORK library. A snippet's own CALL EXECUTE calls queue
+    into this same list, so this drains transitively until truly empty.
+    Imports sas_compiler lazily to avoid a circular import (sas_compiler
+    imports this module at package load time)."""
+    import sas_compiler as _sc
+
+    if _TITLES is None:
+        _TITLES = [""] * 10
+    if _FOOTNOTES is None:
+        _FOOTNOTES = [""] * 10
+    while _EXECUTE_QUEUE:
+        text = _EXECUTE_QUEUE.pop(0)
+        code = _sc.compile_source(text, nested=True)
+        ns = {
+            "_DS": _DS,
+            "_FMT": _FMT,
+            "_LBL": _LBL,
+            "_TITLES": _TITLES,
+            "_FOOTNOTES": _FOOTNOTES,
+        }
+        exec(compile(code, "<call_execute>", "exec"), ns)
+
+
 # PROC FORMAT value lists, keyed by format name (character formats keyed
 # with their leading '$', matching how FORMAT statements reference them).
 USER_FORMATS: dict = {}
