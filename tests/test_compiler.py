@@ -624,6 +624,32 @@ def test_include_splices_macro_library(tmp_path):
     assert ds["out"]["x"].tolist() == [42.0]
 
 
+def test_proc_univariate_output(capsys):
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    2
+    3
+    4
+    5
+    100
+    ;
+    run;
+    proc univariate data=src;
+      var x;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Variable: x" in out
+    assert "N                7" in out
+    assert "Mode             2.0" in out
+    assert "50%  3.0" in out
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

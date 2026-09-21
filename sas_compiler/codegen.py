@@ -645,6 +645,8 @@ class CodeGen:
             self._gen_proc_export(proc)
         elif name == "datasets":
             self._gen_proc_datasets(proc)
+        elif name == "univariate":
+            self._gen_proc_univariate(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -928,6 +930,42 @@ class CodeGen:
                     self.w(f"if {old!r} in _FMT: _FMT[{new!r}] = _FMT.pop({old!r})")
                     self.w(f"if {old!r} in _LBL: _LBL[{new!r}] = _LBL.pop({old!r})")
                     self.last_ds_name = new
+
+    def _gen_proc_univariate(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        self.w(f"_df = _DS[{dsname!r}]")
+        if var_clause:
+            var_list = [n for n, _ in var_clause]
+        else:
+            self.w("_var_list = [c for c in _df.columns if pd.api.types.is_numeric_dtype(_df[c])]")
+            var_list = None
+        vl = repr(var_list) if var_list is not None else "_var_list"
+        self.w(f"for _v in {vl}:")
+        self.indent += 1
+        self.w("_s = _df[_v].dropna()")
+        self.w("print(f'Variable: {_v}')")
+        self.w("print('Moments:')")
+        self.w("print(f'  N                {len(_s)}')")
+        self.w("print(f'  Mean             {_s.mean() if len(_s) else float(\"nan\")}')")
+        self.w("print(f'  Std Deviation    {_s.std() if len(_s) > 1 else float(\"nan\")}')")
+        self.w("print(f'  Variance         {_s.var() if len(_s) > 1 else float(\"nan\")}')")
+        self.w("print(f'  Skewness         {_s.skew() if len(_s) > 2 else float(\"nan\")}')")
+        self.w("print(f'  Kurtosis         {_s.kurt() if len(_s) > 3 else float(\"nan\")}')")
+        self.w("_mode = _s.mode()")
+        self.w("print(f'  Mode             ' + (str(_mode.iloc[0]) if len(_mode) else \".\"))")
+        self.w("print('Quantiles:')")
+        self.w("for _q in (100, 99, 95, 90, 75, 50, 25, 10, 5, 1, 0):")
+        self.indent += 1
+        self.w("_qv = _s.max() if _q == 100 else (_s.min() if _q == 0 else _s.quantile(_q / 100))")
+        self.w("print(f'  {_q:>3}%  {_qv}')")
+        self.indent -= 1
+        self.w("_sorted = _s.sort_values()")
+        self.w("print('Extreme Observations (lowest / highest):')")
+        self.w("print('  lowest: ' + ', '.join(str(v) for v in _sorted.head(5).tolist()))")
+        self.w("print('  highest: ' + ', '.join(str(v) for v in _sorted.tail(5).tolist()))")
+        self.w("print()")
+        self.indent -= 1
 
     def _gen_proc_append(self, proc: A.ProcStep):
         base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None
