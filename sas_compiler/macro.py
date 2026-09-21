@@ -417,12 +417,15 @@ class MacroProcessor:
         if wl == "length":
             sc.pos = m.end()
             return True, self._do_length(sc)
-        if wl == "substr":
+        if wl in ("substr", "qsubstr"):
             sc.pos = m.end()
             return True, self._do_macro_substr(sc)
-        if wl == "scan":
+        if wl in ("scan", "qscan"):
             sc.pos = m.end()
             return True, self._do_macro_scan(sc)
+        if wl == "qupcase":
+            sc.pos = m.end()
+            return True, self._simple_text_func(sc, str.upper)
         if wl == "index":
             sc.pos = m.end()
             return True, self._do_macro_index(sc)
@@ -846,7 +849,7 @@ class MacroProcessor:
         inner = self._read_call_args(sc)
         parts = self._split_top_commas(inner)
         expr = self._parse_program(Scanner(parts[0]), stop_at_mend=False)
-        val = self._eval_arith(expr)
+        val = self._eval_arith(expr, integer_div=False)
         mode = parts[1].strip().lower() if len(parts) > 1 else None
         if mode == "ceil":
             import math
@@ -880,21 +883,109 @@ class MacroProcessor:
             return fargs[0].strip("'\"").lower() if fargs else ""
         if fname == "compress":
             return re.sub(r"\s+", "", fargs[0].strip("'\"")) if fargs else ""
+        if fname == "mdy" and len(fargs) >= 3:
+            m_, d_, y_ = (self._to_num(a) for a in fargs[:3])
+            try:
+                d = datetime.date(int(y_), int(m_), int(d_))
+                return str((d - datetime.date(1960, 1, 1)).days)
+            except (ValueError, OverflowError):
+                return "."
+        if fname in ("year", "month", "day") and fargs:
+            d = self._sas_days_to_date(fargs[0])
+            if not d:
+                return "."
+            return str(getattr(d, fname))
+        if fname == "intck" and len(fargs) >= 3:
+            unit = fargs[0].strip("'\" ").lower()
+            d1 = self._sas_days_to_date(fargs[1])
+            d2 = self._sas_days_to_date(fargs[2])
+            if not d1 or not d2:
+                return "."
+            if unit == "day":
+                return str((d2 - d1).days)
+            if unit == "week":
+                return str((d2 - d1).days // 7)
+            if unit == "month":
+                return str((d2.year - d1.year) * 12 + (d2.month - d1.month))
+            if unit == "year":
+                return str(d2.year - d1.year)
+            return "."
+        if fname == "intnx" and len(fargs) >= 3:
+            unit = fargs[0].strip("'\" ").lower()
+            d = self._sas_days_to_date(fargs[1])
+            n = int(self._to_num(fargs[2]))
+            if not d:
+                return "."
+            if unit == "day":
+                d2 = d + datetime.timedelta(days=n)
+            elif unit == "week":
+                d2 = d + datetime.timedelta(weeks=n)
+            elif unit == "month":
+                total = d.year * 12 + (d.month - 1) + n
+                y, mo = divmod(total, 12)
+                d2 = datetime.date(y, mo + 1, 1)
+            elif unit == "year":
+                d2 = datetime.date(d.year + n, d.month, 1)
+            else:
+                return "."
+            return str((d2 - datetime.date(1960, 1, 1)).days)
+        if fname == "putn" and fargs:
+            value = self._to_num(fargs[0])
+            fmt = fargs[1].strip("'\" ") if len(fargs) > 1 else ""
+            return self._format_number_light(value, fmt)
+        if fname == "inputn" and fargs:
+            return self._fmt_num(self._to_num(fargs[0]))
         # unrecognized: best-effort passthrough of the raw call text
         return resolved
 
+    def _sas_days_to_date(self, raw: str):
+        try:
+            days = int(self._to_num(raw))
+            return datetime.date(1960, 1, 1) + datetime.timedelta(days=days)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _format_number_light(value, fmt: str) -> str:
+        """Small, self-contained numeric-format renderer for %SYSFUNC(PUTN(...))
+        (macro.py deliberately doesn't import runtime.py's fuller apply_format,
+        to keep the macro processor a standalone pass). Covers the common
+        comma/dollar/percent/z/best. families taught in intro coursework."""
+        fmt = fmt.strip()
+        m = re.match(r"^\$?([A-Za-z]*)(\d*)\.?(\d*)$", fmt)
+        if not m or value is None:
+            return MacroProcessor._fmt_num(value)
+        name = m.group(1).lower()
+        width = int(m.group(2)) if m.group(2) else None
+        dec = int(m.group(3)) if m.group(3) else 0
+        if name == "comma":
+            return f"{value:,.{dec}f}"
+        if name == "dollar":
+            return f"${value:,.{dec}f}"
+        if name == "percent":
+            return f"{value * 100:.{dec}f}%"
+        if name == "z":
+            w = width or (dec + 2)
+            return f"{value:0{w}.{dec}f}"
+        if dec:
+            return f"{value:.{dec}f}"
+        return MacroProcessor._fmt_num(value)
+
     # ---------------- expression evaluation for %if / %eval ----------------
     def _eval_condition(self, text: str) -> bool:
-        val = self._MacroExprEval(text).parse_or()
+        # %IF conditions are evaluated through the same integer-arithmetic
+        # rules as %EVAL in real SAS.
+        val = self._MacroExprEval(text, integer_div=True).parse_or()
         if isinstance(val, str):
             return val.strip() not in ("", "0")
         return bool(val)
 
-    def _eval_arith(self, text: str):
-        return self._MacroExprEval(text).parse_or()
+    def _eval_arith(self, text: str, integer_div: bool = True):
+        return self._MacroExprEval(text, integer_div=integer_div).parse_or()
 
     class _MacroExprEval:
-        def __init__(self, text: str):
+        def __init__(self, text: str, integer_div: bool = True):
+            self.integer_div = integer_div
             self.text = text
             self.pos = 0
             self.n = len(text)
@@ -1031,10 +1122,24 @@ class MacroProcessor:
                     op = self.text[self.pos]
                     self.pos += 1
                     right = self.parse_unary()
-                    v = (self._num(v) * self._num(right)) if op == "*" else (self._num(v) / self._num(right))
+                    if op == "*":
+                        v = self._num(v) * self._num(right)
+                    else:
+                        v = self._divide(self._num(v), self._num(right))
                 else:
                     break
             return v
+
+        def _divide(self, a, b):
+            # %EVAL/%IF use integer arithmetic (truncating division);
+            # %SYSEVALF uses real division. Division by zero has no valid
+            # numeric result -- fall back to 0 rather than raising, matching
+            # the rest of this evaluator's "best effort, never crash" style.
+            if b == 0:
+                return 0
+            if self.integer_div:
+                return float(int(a / b))
+            return a / b
 
         def parse_unary(self):
             self._ws()

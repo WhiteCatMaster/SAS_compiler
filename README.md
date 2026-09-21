@@ -49,13 +49,22 @@ BY-group processing, MERGE, dataset options, and PROC SQL.
 ## What's supported
 
 **Macro language:** `%LET`, `%MACRO`/`%MEND` (positional and keyword
-params with defaults), `%IF`/`%THEN`/`%ELSE`, iterative/`%WHILE`/`%UNTIL`
-`%DO` loops, `&var`/`&&var` resolution (including indirect references),
-`%PUT`, `%GLOBAL`/`%LOCAL`, `%EVAL`/`%SYSEVALF`, `%STR`/`%NRSTR`, and the
-text functions `%UPCASE`/`%LOWCASE`/`%SUBSTR`/`%SCAN`/`%INDEX`/`%LENGTH`/
-`%TRIM`/`%CMPRES`, and `%INCLUDE "file.sas"` to splice in another source
-file. `%SYSFUNC` supports a small allowlist (`TODAY`, `TRIM`, `UPCASE`,
-`LOWCASE`, `COMPRESS`).
+params with defaults, arbitrarily nested calls), `%IF`/`%THEN`/`%ELSE`,
+iterative/`%WHILE`/`%UNTIL` `%DO` loops (nestable inside each other and
+inside `%IF`/`%THEN`/`%ELSE` branches), `&var`/`&&var` resolution
+(including indirect references), `%PUT`, `%GLOBAL`/`%LOCAL`,
+`%EVAL`/`%SYSEVALF` (`%EVAL`/`%IF` use SAS's integer, truncating-division
+arithmetic; `%SYSEVALF` uses real division), `%STR`/`%NRSTR`, and the
+text functions `%UPCASE`/`%QUPCASE`/`%LOWCASE`/`%SUBSTR`/`%QSUBSTR`/
+`%SCAN`/`%QSCAN`/`%INDEX`/`%LENGTH`/`%TRIM`/`%CMPRES` (the `Q`-prefixed
+forms behave the same as their plain counterparts here, since this
+implementation never re-scans a function's result for further macro
+triggers — there's nothing extra for the "quoted" variant to suppress),
+and `%INCLUDE "file.sas"` to splice in another source file. `%SYSFUNC`
+supports `TODAY`, `TRIM`, `UPCASE`, `LOWCASE`, `COMPRESS`, `MDY`,
+`YEAR`/`MONTH`/`DAY`, `INTCK`/`INTNX` (day/week/month/year units), `PUTN`
+(a small format subset: `COMMAw.d`/`DOLLARw.d`/`PERCENTw.d`/`Zw.d`), and
+`INPUTN`.
 
 **DATA step:** `SET`/`MERGE` (with `BY`, including multi-level
 `first.`/`last.` group processing), dataset options (`DROP=`, `KEEP=`,
