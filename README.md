@@ -39,6 +39,8 @@ pip install -e .
 sasc program.sas --run                 # compile and execute immediately
 sasc program.sas -o program.py         # write the generated Python
 sasc program.sas --emit-macro          # show macro-expanded SAS (debugging)
+sasc program.sas --check               # parse only; report errors, generate/run nothing
+sasc --version                         # print the installed version and exit
 ```
 
 Or from the repo without installing: `python -m sas_compiler.cli program.sas --run`.
@@ -163,11 +165,19 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   A PROC's own `DATA=`/`OUT=` doesn't resolve a libref table directly —
   stage it into a `work.` dataset with a `SET` first.
 - Formats affect display (`PROC PRINT`, `PUT()`) but not the underlying
-  stored value, and there's no `PROC FORMAT` for user-defined value
-  lists — only the built-in format families listed above.
-- PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/`SQL`
-  raise a clear `NotImplementedError` naming the missing PROC, rather
-  than silently doing nothing.
+  stored value.
+- PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
+  `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
+  `CORR`/`REG`/`LOGISTIC`/`SQL` raise a clear `NotImplementedError`
+  naming the missing PROC, rather than silently doing nothing.
+- A DATA step whose output has **zero rows** (e.g. every row is
+  filtered by a subsetting `IF`) produces an empty dataset with no
+  columns at all, rather than zero rows of the expected shape — the
+  column set is inferred from the emitted rows, and there are none to
+  infer from.
+- `RETAIN var1-var3 0;` does not expand the dash range the way
+  `ARRAY`'s element lists do — write out each variable explicitly
+  (`RETAIN var1 0 var2 0 var3 0;`) until this is fixed.
 
 ## Tests
 
