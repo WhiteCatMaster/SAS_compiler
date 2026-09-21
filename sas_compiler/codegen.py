@@ -1,6 +1,8 @@
 """AST -> Python (pandas/duckdb) code generator."""
 from __future__ import annotations
 
+import itertools
+import os
 import re
 
 from . import ast_nodes as A
@@ -24,13 +26,19 @@ _FUNC_MAP = {
     "missing": "missing_", "round": "round_", "year": "year_",
     "month": "month_", "day": "day_", "weekday": "weekday_",
     "index": "index_", "input": "input_", "std": "std_",
+    "time": "time_", "datetime": "datetime_",
+    "hour": "hour_", "minute": "minute_", "second": "second_",
+    "reverse": "reverse_", "quote": "quote_",
 }
 
 _DIRECT_FUNCS = {
     "substr", "upcase", "lowcase", "propcase", "trim", "strip", "left",
     "compress", "length", "lengthn", "scan", "countw", "cat", "catx",
-    "cats", "tranwrd", "indexc", "today", "intck", "intnx", "coalesce",
+    "cats", "tranwrd", "translate", "verify", "prxmatch",
+    "compbl", "findc", "findw", "dequote",
+    "indexc", "today", "intck", "intnx", "coalesce",
     "coalescec", "ifn", "ifc", "put", "sas_date",
+    "sas_time", "sas_datetime", "datepart", "timepart", "dhms", "hms",
 }
 
 # PROC MEANS/SUMMARY statistic keyword -> Python expression computing it
@@ -63,6 +71,10 @@ def walk_stmts(stmts):
             yield from walk_stmts(s.orelse)
         elif isinstance(s, A.DoBlock):
             yield from walk_stmts(s.body)
+        elif isinstance(s, A.SelectStmt):
+            for (_, body) in s.whens:
+                yield from walk_stmts(body)
+            yield from walk_stmts(s.otherwise)
 
 
 def _rewrite_expr(e: A.Expr, arrname: str, idxvar: str) -> A.Expr:
@@ -108,6 +120,14 @@ def _rewrite_stmt(s, arrname: str, idxvar: str):
             body=[_rewrite_stmt(st, arrname, idxvar) for st in s.body],
             over_array=s.over_array,
         )
+    if isinstance(s, A.SelectStmt):
+        return A.SelectStmt(
+            select_expr=_rewrite_expr(s.select_expr, arrname, idxvar) if s.select_expr is not None else None,
+            whens=[([_rewrite_expr(c, arrname, idxvar) for c in conds],
+                    [_rewrite_stmt(st, arrname, idxvar) for st in body])
+                   for (conds, body) in s.whens],
+            otherwise=[_rewrite_stmt(st, arrname, idxvar) for st in s.otherwise],
+        )
     if isinstance(s, A.PutStmt):
         return A.PutStmt(args=[_rewrite_expr(a, arrname, idxvar) for a in s.args])
     if isinstance(s, A.CallStmt):
@@ -129,6 +149,9 @@ class CodeGen:
         self.hidden_vars: set = set()
         self.db_libs: dict = {}  # libref -> conn string, in program order
         self.sgplot_counter = 0  # for default OUT= filenames (sgplot_1.png, ...)
+        self.loop_stack: list = []
+        self._put_target: str | None = None  # file handle var for PUT, else stdout
+        self._put_sep: str = " "
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -148,6 +171,8 @@ class CodeGen:
         self.w("_DS = {}")
         self.w("_FMT = {}")
         self.w("_LBL = {}")
+        self.w("_TITLE = ''")
+        self.w("_FOOTNOTE = ''")
         self.w("")
         fnames = []
         for step in prog.steps:
@@ -157,6 +182,8 @@ class CodeGen:
                 fnames.append(self.gen_proc_step(step))
             elif isinstance(step, A.LibnameStmt):
                 fnames.append(self.gen_libname_step(step))
+            elif isinstance(step, A.TitleStmt):
+                fnames.append(self.gen_title_step(step))
         self.w("")
         for fn in fnames:
             self.w(f"{fn}()")
@@ -214,6 +241,8 @@ class CodeGen:
             return f"{hashref}.add({varmap})"
         if method == "clear":
             return f"{hashref}.clear()"
+        if method in ("first", "last", "next", "prev"):
+            return f"{hashref}.{method}({varmap})"
         raise CodegenError(f"unsupported hash object method .{e.method}()")
 
     def _gen_binop(self, e: A.BinOp, varmap: str) -> str:
@@ -243,6 +272,14 @@ class CodeGen:
 
     def _gen_call(self, e: A.Call, varmap: str) -> str:
         name = e.name.lower()
+        m = re.match(r"^dif(\d*)$", name)
+        if m:
+            depth = int(m.group(1)) if m.group(1) else 1
+            if not e.args:
+                raise CodegenError("dif() requires an argument")
+            key = e.args[0].name if isinstance(e.args[0], A.Var) else f"expr{id(e)}"
+            argcode = self.gen_expr(e.args[0], varmap)
+            return f"_r.dif_(_lag, {key!r}, {argcode}, {depth})"
         if name in ("lag",) or re.match(r"^lag(\d+)$", name):
             m = re.match(r"^lag(\d+)$", name)
             depth = int(m.group(1)) if m else 1
@@ -284,6 +321,8 @@ class CodeGen:
             self._gen_assign(s)
         elif isinstance(s, A.If):
             self._gen_if(s)
+        elif isinstance(s, A.SelectStmt):
+            self._gen_select(s)
         elif isinstance(s, A.DoBlock):
             self._gen_do(s)
         elif isinstance(s, A.Output):
@@ -296,15 +335,31 @@ class CodeGen:
             self.w("raise _r._RowDelete()")
         elif isinstance(s, A.ReturnStmt):
             self.w("raise _r._RowReturn()")
+        elif isinstance(s, A.StopStmt):
+            self.w("raise _r._DataStop()")
+        elif isinstance(s, A.AbortStmt):
+            msg = f": {s.message}" if s.message else ""
+            self.w(f"raise RuntimeError('DATA step ABORT{msg}')")
+        elif isinstance(s, A.LeaveStmt):
+            if not self.loop_stack:
+                raise CodegenError("LEAVE outside a DO loop")
+            self.w("break")
+        elif isinstance(s, A.ContinueStmt):
+            self._gen_continue()
         elif isinstance(s, A.ExprStmt):
             self.w(self.gen_expr(s.expr))
         elif isinstance(s, A.DeclareHashStmt):
             self._gen_declare_hash(s)
-        elif isinstance(s, (A.SetStmt, A.MergeStmt, A.WhereStmt, A.InputStmt, A.DatalinesStmt)):
+        elif isinstance(s, A.DeclareHiterStmt):
+            self.w(f"_hashes[{s.itername!r}] = _r.SasHIter(_hashes.get({s.hashname!r}))")
+        elif isinstance(s, (A.MergeStmt, A.UpdateStmt, A.WhereStmt, A.InputStmt,
+                              A.InfileStmt, A.FileStmt, A.DatalinesStmt)):
             raise CodegenError(
                 f"{type(s).__name__} may only appear at the top level of a DATA step, "
                 "not nested inside IF/DO"
             )
+        elif isinstance(s, A.SetStmt):
+            self._gen_nested_set(s)
         elif isinstance(s, (A.ArrayStmt, A.RetainStmt, A.DropStmt, A.KeepStmt,
                              A.LengthStmt, A.FormatStmt, A.LabelStmt, A.ByStmt)):
             pass  # declarative; only meaningful at top level, already handled there
@@ -313,15 +368,18 @@ class CodeGen:
 
     def _gen_declare_hash(self, s: A.DeclareHashStmt):
         ds_arg = None
+        multi = False
         for (argname, expr) in s.args:
             if (argname or "").lower() == "dataset":
                 if not isinstance(expr, A.Str):
                     raise CodegenError("declare hash: dataset: expects a string literal")
                 ds_arg = normalize_dsname(expr.value)
+            elif (argname or "").lower() == "multidata":
+                multi = isinstance(expr, A.Str) and expr.value.lower().startswith("y")
         if ds_arg:
-            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash(_DS.get({ds_arg!r}))")
+            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash(_DS.get({ds_arg!r}), multi={multi!r})")
         else:
-            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash()")
+            self.w(f"_hashes[{s.hashname!r}] = _r.SasHash(multi={multi!r})")
 
     def _gen_assign(self, s: A.Assign):
         expr_code = self.gen_expr(s.expr)
@@ -350,6 +408,54 @@ class CodeGen:
                 self.gen_stmt(st)
             self.indent -= 1
 
+    def _gen_select(self, s: A.SelectStmt):
+        selvar = None
+        if s.select_expr is not None:
+            selvar = self.newtmp("sel")
+            self.w(f"{selvar} = {self.gen_expr(s.select_expr)}")
+        first = True
+        for (conds, body) in s.whens:
+            if selvar is not None:
+                tests = " or ".join(
+                    f"_r.truthy(_r.eq({selvar}, {self.gen_expr(c)}))" for c in conds
+                ) or "False"
+            else:
+                tests = " or ".join(
+                    f"_r.truthy({self.gen_expr(c)})" for c in conds
+                ) or "False"
+            self.w(f"{'if' if first else 'elif'} {tests}:")
+            first = False
+            self.indent += 1
+            if body:
+                for st in body:
+                    self.gen_stmt(st)
+            else:
+                self.w("pass")
+            self.indent -= 1
+        if s.otherwise:
+            self.w("else:" if not first else "if True:")
+            self.indent += 1
+            for st in s.otherwise:
+                self.gen_stmt(st)
+            self.indent -= 1
+
+    def _gen_continue(self):
+        if not self.loop_stack:
+            raise CodegenError("CONTINUE outside a DO loop")
+        top = self.loop_stack[-1]
+        kind = top["kind"]
+        if kind == "iterative":
+            self.w(f"{top['v']} = {top['v']} + {top['by']}")
+            self.w("continue")
+        elif kind == "until":
+            self.w(f"if _r.truthy({top['cond']}):")
+            self.indent += 1
+            self.w("break")
+            self.indent -= 1
+            self.w("continue")
+        else:
+            self.w("continue")
+
     def _gen_do(self, s: A.DoBlock):
         if s.kind == "block":
             for st in s.body:
@@ -370,8 +476,12 @@ class CodeGen:
             # translate the 1..dim loop counter into the array's actual SAS
             # subscript value, since ArrayRef codegen subtracts lo_bound
             self.w(f"pdv[{idxkey!r}] = float({v} + {arrstmt.lo_bound - 1})")
-            for st in s.body:
-                self.gen_stmt(_rewrite_stmt(st, arrname, idxkey))
+            self.loop_stack.append({"kind": "over"})
+            try:
+                for st in s.body:
+                    self.gen_stmt(_rewrite_stmt(st, arrname, idxkey))
+            finally:
+                self.loop_stack.pop()
             self.indent -= 1
             return
         if s.kind == "iterative":
@@ -383,24 +493,37 @@ class CodeGen:
             self.w(f"while ({by} > 0 and {v} <= {hi}) or ({by} < 0 and {v} >= {hi}):")
             self.indent += 1
             self.w(f"pdv[{s.var!r}] = {v}")
-            for st in s.body:
-                self.gen_stmt(st)
+            self.loop_stack.append({"kind": "iterative", "v": v, "by": by})
+            try:
+                for st in s.body:
+                    self.gen_stmt(st)
+            finally:
+                self.loop_stack.pop()
             self.w(f"{v} = {v} + {by}")
             self.indent -= 1
             return
         if s.kind == "while":
             self.w(f"while _r.truthy({self.gen_expr(s.cond)}):")
             self.indent += 1
-            for st in s.body:
-                self.gen_stmt(st)
+            self.loop_stack.append({"kind": "while"})
+            try:
+                for st in s.body:
+                    self.gen_stmt(st)
+            finally:
+                self.loop_stack.pop()
             self.indent -= 1
             return
         if s.kind == "until":
+            cond_code = self.gen_expr(s.cond)
             self.w("while True:")
             self.indent += 1
-            for st in s.body:
-                self.gen_stmt(st)
-            self.w(f"if _r.truthy({self.gen_expr(s.cond)}):")
+            self.loop_stack.append({"kind": "until", "cond": cond_code})
+            try:
+                for st in s.body:
+                    self.gen_stmt(st)
+            finally:
+                self.loop_stack.pop()
+            self.w(f"if _r.truthy({cond_code}):")
             self.indent += 1
             self.w("break")
             self.indent -= 1
@@ -424,7 +547,14 @@ class CodeGen:
                 parts.append(repr(a.value))
             else:
                 parts.append(f"_r.sas_str({self.gen_expr(a)})")
-        self.w(f"print({', '.join(parts)})" if parts else "print()")
+        if getattr(self, "_put_target", None):
+            sep = getattr(self, "_put_sep", " ")
+            if parts:
+                self.w(f"{self._put_target}.write({sep!r}.join([{', '.join(parts)}]) + '\\n')")
+            else:
+                self.w(f"{self._put_target}.write('\\n')")
+        else:
+            self.w(f"print({', '.join(parts)})" if parts else "print()")
 
     def _gen_call_stmt(self, s: A.CallStmt):
         name = s.name.lower()
@@ -443,6 +573,10 @@ class CodeGen:
             a0, a1 = s.args
             self.w(f"_r.MACRO_VARS[str({self.gen_expr(a0)}).strip().lower()] = _r.sas_str({self.gen_expr(a1)})")
             return
+        if name == "symputx":
+            a0, a1 = s.args[0], s.args[1]
+            self.w(f"_r.MACRO_VARS[str({self.gen_expr(a0)}).strip().lower()] = _r.sas_str({self.gen_expr(a1)}).strip()")
+            return
         if name == "missing":
             for a in s.args:
                 if isinstance(a, A.Var):
@@ -451,6 +585,17 @@ class CodeGen:
         self.w(f"pass  # unsupported: call {name}(...)")
 
     # ---------------- DATA step ----------------
+    def gen_title_step(self, stmt: A.TitleStmt) -> str:
+        self.step_idx += 1
+        fname = f"_step_{self.step_idx}"
+        self.w(f"def {fname}():")
+        self.indent += 1
+        var = "_FOOTNOTE" if stmt.kind == "footnote" else "_TITLE"
+        self.w(f"global {var}")
+        self.w(f"{var} = {stmt.text!r}")
+        self.indent -= 1
+        return fname
+
     def gen_libname_step(self, stmt: A.LibnameStmt) -> str:
         self.step_idx += 1
         fname = f"_step_{self.step_idx}"
@@ -469,7 +614,9 @@ class CodeGen:
         self.step_idx += 1
         fname = f"_step_{self.step_idx}"
 
-        set_stmt = merge_stmt = by_stmt = input_stmt = datalines_stmt = None
+        set_stmt = merge_stmt = update_stmt = by_stmt = input_stmt = datalines_stmt = None
+        infile_stmt = None
+        file_stmt = None
         arrays: dict[str, A.ArrayStmt] = {}
         retains: list = []
         drops: set = set()
@@ -480,10 +627,12 @@ class CodeGen:
         body = []
 
         for s in ds.statements:
-            if isinstance(s, A.SetStmt) and set_stmt is None and merge_stmt is None:
+            if isinstance(s, A.SetStmt) and set_stmt is None and merge_stmt is None and update_stmt is None:
                 set_stmt = s
-            elif isinstance(s, A.MergeStmt) and merge_stmt is None:
+            elif isinstance(s, A.MergeStmt) and merge_stmt is None and update_stmt is None:
                 merge_stmt = s
+            elif isinstance(s, A.UpdateStmt) and update_stmt is None and merge_stmt is None:
+                update_stmt = s
             elif isinstance(s, A.ByStmt) and by_stmt is None:
                 by_stmt = s
             elif isinstance(s, A.ArrayStmt):
@@ -503,6 +652,10 @@ class CodeGen:
                 labels.update(dict(s.entries))
             elif isinstance(s, A.InputStmt) and input_stmt is None:
                 input_stmt = s
+            elif isinstance(s, A.InfileStmt) and infile_stmt is None:
+                infile_stmt = s
+            elif isinstance(s, A.FileStmt):
+                file_stmt = s  # last FILE wins, mirroring SAS default output
             elif isinstance(s, A.DatalinesStmt) and datalines_stmt is None:
                 datalines_stmt = s
             elif isinstance(s, A.WhereStmt):
@@ -528,6 +681,7 @@ class CodeGen:
         has_explicit_output = any(isinstance(s, A.Output) for s in walk_stmts(ds.statements))
         self.current_arrays = arrays
         self.hidden_vars = set()
+        self.loop_stack = []
 
         self.w(f"def {fname}():")
         self.indent += 1
@@ -564,6 +718,18 @@ class CodeGen:
                 self.w(f"_iter = _r.iter_merge_by(_m_sources, [{byvars_lit}])")
             else:
                 self.w("_iter = _r.iter_merge_positional([_s for _, _s, _f in _m_sources])")
+        elif update_stmt is not None:
+            self.w("_m_sources = []")
+            for (name, opts, db_info) in update_stmt.datasets:
+                dfcode = self._gen_ds_opts_expr(name, opts, db_info)
+                inflag = opts.get("in_flag")
+                inflag_lit = repr(inflag) if inflag else "None"
+                self.w(f"_m_sources.append(({name!r}, {dfcode}, {inflag_lit}))")
+            if by_vars:
+                byvars_lit = ", ".join(repr(v) for v in by_vars)
+                self.w(f"_iter = _r.iter_update_by(_m_sources, [{byvars_lit}])")
+            else:
+                self.w("_iter = _r.iter_merge_positional([_s for _, _s, _f in _m_sources])")
         elif set_stmt is not None:
             self.w("_s_dfs = []")
             for (name, opts, db_info) in set_stmt.datasets:
@@ -578,8 +744,27 @@ class CodeGen:
             rows = self._parse_datalines_rows(datalines_stmt, input_stmt)
             rows_src = "[" + ", ".join(self._dict_literal(r) for r in rows) + "]"
             self.w(f"_iter = [(row, {{}}) for row in {rows_src}]")
+        elif infile_stmt is not None and input_stmt is not None:
+            varspec = [(n, c) for (n, c) in input_stmt.vars]
+            self.w(
+                f"_iter = [(row, {{}}) for row in _r.read_infile("
+                f"{infile_stmt.path!r}, {varspec!r}, dlm={infile_stmt.dlm!r}, "
+                f"dsd={infile_stmt.dsd!r}, firstobs={infile_stmt.firstobs!r}, "
+                f"obs={infile_stmt.obs!r})]"
+            )
         else:
             self.w("_iter = _r.iter_once()")
+
+        self._put_target = None
+        self._put_sep = " "
+        need_close = (
+            file_stmt is not None and file_stmt.path.lower() not in ("log", "print")
+        )
+        if need_close:
+            mode = "a" if file_stmt.mod else "w"
+            self.w(f"_fout = open({file_stmt.path!r}, {mode!r})")
+            self._put_target = "_fout"
+            self._put_sep = file_stmt.dlm or " "
 
         self.w("_rownum = 0")
         self.w("for _row, _flags in _iter:")
@@ -608,12 +793,19 @@ class CodeGen:
         self.indent += 1
         self.w("continue")
         self.indent -= 1
+        self.w("except _r._DataStop:")
+        self.indent += 1
+        self.w("break")
+        self.indent -= 1
         if not has_explicit_output:
             self.w("for _dsname in _out_rows:")
             self.indent += 1
             self.w("_out_rows[_dsname].append(dict(pdv))")
             self.indent -= 1
         self.indent -= 1  # end for _row
+        if need_close:
+            self.w("_fout.close()")
+        self._put_target = None
 
         temp_array_vars = {e for arrstmt in arrays.values() if arrstmt.is_temporary for e in arrstmt.elements}
         auto_drop = (
@@ -660,10 +852,70 @@ class CodeGen:
         wherecode = "None"
         if where is not None:
             wherecode = f"(lambda row: _r.truthy({self.gen_expr(where, varmap='row')}))"
-        return (
+        expr = (
             f"_r.apply_ds_opts({src_expr}, keep={keep!r} or None, "
             f"drop={drop!r} or None, rename={rename!r} or None, where={wherecode})"
         )
+        firstobs = opts.get("firstobs")
+        if isinstance(firstobs, (int, float)) or (isinstance(firstobs, str) and firstobs.isdigit()):
+            expr = f"({expr}).iloc[{int(firstobs) - 1}:].reset_index(drop=True)"
+        obs = opts.get("obs")
+        if isinstance(obs, (int, float)) or (isinstance(obs, str) and str(obs).isdigit()):
+            expr = f"({expr}).head({int(obs)})"
+        return expr
+
+    @staticmethod
+    def _point_expr(tok: str) -> str:
+        """Python expression for a POINT= option token: a numeric literal
+        or a PDV variable reference (1-based SAS observation number)."""
+        try:
+            return repr(float(tok))
+        except (TypeError, ValueError):
+            return f"_r.nomiss_sum(pdv.get({tok.lower()!r}, _r.MISSING), 0.0)"
+
+    def _gen_nested_set(self, s) -> None:
+        """A SET statement nested inside IF/DO: single dataset, sequential
+        cursor or POINT= random access, optional NOBS= size variable."""
+        if len(s.datasets) != 1:
+            raise CodegenError("nested SET supports a single dataset (use POINT= for random access)")
+        (name, opts, db_info) = s.datasets[0]
+        if opts.get("in_flag"):
+            raise CodegenError("nested SET does not support IN=")
+        base = self._gen_ds_opts_expr(name, opts, db_info)
+        dfvar = self.newtmp("sdf")
+        self.w(f"{dfvar} = {base}")
+        nobs = opts.get("nobs")
+        if isinstance(nobs, str) and nobs:
+            self.w(f"pdv[{nobs.lower()!r}] = float(len({dfvar}))")
+        point = opts.get("point")
+        endvar = opts.get("end")
+        if point:
+            self.w(f"_pidx = int({self._point_expr(point)}) - 1")
+            self.w(f"if 0 <= _pidx < len({dfvar}):")
+            self.indent += 1
+            self.w(f"pdv.update({dfvar}.iloc[_pidx].to_dict())")
+            self.indent -= 1
+            self.w("else:")
+            self.indent += 1
+            if isinstance(endvar, str) and endvar:
+                self.w(f"pdv[{endvar.lower()!r}] = True")
+            self.w("raise _r._DataStop()")
+            self.indent -= 1
+        else:
+            curvar = f"_setcur_{name}"
+            self.hidden_vars.add(curvar)
+            self.w(f"_cur = int(pdv.get({curvar!r}, 0.0))")
+            self.w(f"if _cur < len({dfvar}):")
+            self.indent += 1
+            self.w(f"pdv.update({dfvar}.iloc[_cur].to_dict())")
+            self.w(f"pdv[{curvar!r}] = float(_cur + 1)")
+            self.indent -= 1
+            self.w("else:")
+            self.indent += 1
+            if isinstance(endvar, str) and endvar:
+                self.w(f"pdv[{endvar.lower()!r}] = True")
+            self.w("raise _r._DataStop()")
+            self.indent -= 1
 
     @staticmethod
     def _dict_literal(row: dict) -> str:
@@ -702,6 +954,8 @@ class CodeGen:
             self._gen_proc_sql(proc)
         elif name == "print":
             self._gen_proc_print(proc)
+        elif name == "contents":
+            self._gen_proc_contents(proc)
         elif name == "sort":
             self._gen_proc_sort(proc)
         elif name in ("means", "summary"):
@@ -752,11 +1006,47 @@ class CodeGen:
             return self.last_ds_name
         raise CodegenError(f"PROC {proc.name.upper()} has no DATA= and no prior dataset to default to")
 
+    def _proc_src(self, proc: A.ProcStep, dsname: str) -> str:
+        """Python expression loading a PROC's DATA= dataset: real-database
+        read-through when it names a libref registered via LIBNAME
+        (SQLite file, server URL, or a directory of .sas7bdat/.csv files),
+        else the in-memory _DS entry."""
+        raw = proc.options.get("data")
+        if isinstance(raw, str) and "." in raw:
+            lib, tbl = raw.split(".", 1)
+            if lib.lower() in self.db_libs and lib.lower() != "work":
+                return f"_r.db_read_table({lib.lower()!r}, {tbl.lower()!r})"
+        return f"_DS[{dsname!r}]"
+
+    def _store_out(self, raw: str | None, flat: str, df_var: str):
+        """Store a PROC OUT= result into _DS[flat] (and last_ds_name), with
+        write-through via db_write_table when OUT= names a LIBNAME table."""
+        self.w(f"_DS[{flat!r}] = {df_var}")
+        if isinstance(raw, str) and "." in raw:
+            lib, tbl = raw.split(".", 1)
+            if lib.lower() in self.db_libs and lib.lower() != "work":
+                self.w(f"_r.db_write_table({lib.lower()!r}, {tbl.lower()!r}, {df_var})")
+        self.last_ds_name = flat
+
     def _clause(self, proc: A.ProcStep, key: str):
         for k, v in proc.clauses:
             if k == key:
                 return v
         return None
+
+    def _gen_proc_filters(self, proc: A.ProcStep):
+        """Emit WHERE-statement and OBS=/FIRSTOBS= filtering lines for a
+        PROC's already-loaded _df (dataset options flattened into PROC
+        options by the parser, e.g. DATA=x(OBS=5) -> options['obs'])."""
+        where_cond = self._clause(proc, "where")
+        if where_cond is not None:
+            self.w(f"_df = _r.apply_ds_opts(_df, where=(lambda row: _r.truthy({self.gen_expr(where_cond, varmap='row')})))")
+        firstobs = proc.options.get("firstobs")
+        if isinstance(firstobs, (int, float)) or (isinstance(firstobs, str) and firstobs.isdigit()):
+            self.w(f"_df = _df.iloc[{int(firstobs) - 1}:].reset_index(drop=True)")
+        obs = proc.options.get("obs")
+        if isinstance(obs, (int, float)) or (isinstance(obs, str) and str(obs).isdigit()):
+            self.w(f"_df = _df.head({int(obs)})")
 
     @staticmethod
     def _num_lit(v: float) -> str:
@@ -784,7 +1074,14 @@ class CodeGen:
         self.indent += 1
         self.w("_con.register(_n, _d)")
         self.indent -= 1
-        sqlite_libs = {lr: c for lr, c in self.db_libs.items() if "://" not in c}
+        sqlite_libs = {
+            lr: c for lr, c in self.db_libs.items()
+            if "://" not in c and not os.path.isdir(c)
+        }
+        dir_libs = {
+            lr: c for lr, c in self.db_libs.items()
+            if "://" not in c and os.path.isdir(c)
+        }
         if sqlite_libs:
             self.w("try:")
             self.indent += 1
@@ -797,6 +1094,31 @@ class CodeGen:
             self.indent += 1
             self.w("print(f'warning: could not attach SQLite library: {_e}')")
             self.indent -= 1
+        for libref, conn in dir_libs.items():
+            self.w(f"_r.sql_attach_dir(_con, {libref!r}, {conn!r})")
+        url_libs = [lr for lr, c in self.db_libs.items() if "://" in c]
+        if url_libs:
+            # Server-backed libraries can't be ATTACHed: scan the SQL text
+            # for libref.table references and stage those tables as views.
+            # Each read is guarded -- a libref-shaped table alias in the
+            # query must not break it.
+            seen: set = set()
+            for _, stmt in proc.clauses:
+                for m in re.finditer(r"(?i)(?<![\w$])([A-Za-z_]\w*)\.([A-Za-z_]\w*)", stmt):
+                    lib, tbl = m.group(1).lower(), m.group(2).lower()
+                    if lib in url_libs and (lib, tbl) not in seen:
+                        seen.add((lib, tbl))
+                        reg = f"_saslib_{lib}_{tbl}"
+                        self.w("try:")
+                        self.indent += 1
+                        self.w(f"_con.execute('CREATE SCHEMA IF NOT EXISTS \"{lib}\"')")
+                        self.w(f"_con.register({reg!r}, _r.db_read_table({lib!r}, {tbl!r}))")
+                        self.w(f"_con.execute('CREATE OR REPLACE VIEW \"{lib}\".\"{tbl}\" AS SELECT * FROM \"{reg}\"')")
+                        self.indent -= 1
+                        self.w("except Exception as _e:")
+                        self.indent += 1
+                        self.w(f"print(f'warning: could not stage {lib}.{tbl}: ' + str(_e))")
+                        self.indent -= 1
         for _, stmt in proc.clauses:
             m = re.match(r"(?is)^\s*create\s+table\s+([A-Za-z_][A-Za-z0-9_.]*)\s+as\s+(select.*)$", stmt)
             self.w(f"_res = _con.execute({stmt!r})")
@@ -807,13 +1129,25 @@ class CodeGen:
             elif re.match(r"(?is)^\s*select", stmt):
                 self.w("print(_res.df().to_string(index=False))")
 
+    def _gen_proc_contents(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self.w(f"print('Dataset: {dsname}  (NOBS=' + str(len(_df)) + ')')")
+        self.w("print('Variables:')")
+        self.w("for _i, _c in enumerate(_df.columns, start=1):")
+        self.indent += 1
+        self.w("print(f'  {_i}  {_c} ({_df[_c].dtype})')")
+        self.indent -= 1
+
     def _gen_proc_print(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w("if _TITLE: print(_TITLE)")
         var_clause = self._clause(proc, "var")
         if var_clause:
             cols = [n for n, _ in var_clause]
-            self.w(f"_df = _df[{cols!r}]")
+            self.w(f"_df = _df[[c for c in {cols!r} if c in _df.columns]]")
         self.w(f"_fmts = _FMT.get({dsname!r}, {{}})")
         self.w("_pf = _df.copy()")
         self.w("for _c, _fmt in _fmts.items():")
@@ -823,11 +1157,49 @@ class CodeGen:
         self.w("_pf[_c] = _pf[_c].map(lambda v: _r.apply_format(v, _fmt))")
         self.indent -= 1
         self.indent -= 1
-        self.w("_pf.index = range(1, len(_pf) + 1)")
-        self.w("_pf.index.name = 'Obs'")
+        sum_clause = self._clause(proc, "sum")
+        sum_vars = []
+        if isinstance(sum_clause, str):
+            sum_vars = [t for t in re.split(r"[\s,;]+", sum_clause.strip().lower()) if t and t != "sum"]
+        if not proc.options.get("noobs"):
+            id_clause = self._clause(proc, "id")
+            id_cols = [n for n, _ in id_clause] if id_clause else []
+            if id_cols:
+                self.w(f"_idcols = [c for c in {id_cols!r} if c in _pf.columns]")
+                self.w("if _idcols:")
+                self.indent += 1
+                self.w("_pf.index = _pf[_idcols].astype(str).agg(' '.join, axis=1)")
+                self.w("_pf.index.name = None")
+                self.indent -= 1
+                self.w("else:")
+                self.indent += 1
+                self.w("_pf.index = range(1, len(_pf) + 1)")
+                self.w("_pf.index.name = 'Obs'")
+                self.indent -= 1
+            else:
+                self.w("_pf.index = range(1, len(_pf) + 1)")
+                self.w("_pf.index.name = 'Obs'")
+        if sum_vars:
+            self.w("_pf.loc['Total'] = ''")
+            for _c in sum_vars:
+                self.w(f"if {_c!r} in _pf.columns:")
+                self.indent += 1
+                self.w(f"_pf.loc['Total', {_c!r}] = pd.to_numeric(_pf[{_c!r}], errors='coerce').sum()")
+                self.indent -= 1
+            if proc.options.get("noobs"):
+                # index (and its 'Total' label) is hidden with NOOBS, so
+                # stamp the label into the first column instead
+                self.w("if len(_pf) and str(_pf.iloc[-1, 0]) in ('', 'nan', 'NaN', 'None'):")
+                self.indent += 1
+                self.w("_pf.iloc[-1, 0] = 'Total'")
+                self.indent -= 1
         self.w(f"_lbls = _LBL.get({dsname!r}, {{}})")
         self.w("if _lbls: _pf = _pf.rename(columns=_lbls)")
-        self.w("print(_pf.to_string())")
+        if proc.options.get("noobs"):
+            self.w("print(_pf.to_string(index=False))")
+        else:
+            self.w("print(_pf.to_string())")
+        self.w("if _FOOTNOTE: print(_FOOTNOTE)")
 
     def _gen_proc_sort(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -837,22 +1209,61 @@ class CodeGen:
             raise CodegenError("PROC SORT requires a BY statement")
         cols = [n for n, _ in by_clause]
         ascending = [not desc for _, desc in by_clause]
-        self.w(f"_df = _DS[{dsname!r}].copy()")
+        self.w(f"_df = ({self._proc_src(proc, dsname)}).copy()")
+        self._gen_proc_filters(proc)
         self.w(f"_df = _df.sort_values(by={cols!r}, ascending={ascending!r}, kind='mergesort')")
+        dupout_raw = proc.options.get("dupout") if isinstance(proc.options.get("dupout"), str) else None
         if proc.options.get("nodupkey"):
+            if dupout_raw:
+                self.w(f"_dups = _df[_df.duplicated(subset={cols!r}, keep='first')]")
             self.w(f"_df = _df.drop_duplicates(subset={cols!r}, keep='first')")
-        elif proc.options.get("nodup"):
+        elif proc.options.get("nodup") or proc.options.get("noduprecs"):
+            if dupout_raw:
+                self.w("_dups = _df[_df.duplicated(keep='first')]")
             self.w("_df = _df.drop_duplicates(keep='first')")
         self.w("_df = _df.reset_index(drop=True)")
-        self.w(f"_DS[{out!r}] = _df")
+        if dupout_raw:
+            self._store_out(dupout_raw, normalize_dsname(dupout_raw), "_dups")
         if out != dsname:
             self.w(f"if {dsname!r} in _FMT: _FMT[{out!r}] = _FMT[{dsname!r}]")
             self.w(f"if {dsname!r} in _LBL: _LBL[{out!r}] = _LBL[{dsname!r}]")
-        self.last_ds_name = out
+        self._store_out(
+            proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
+            out, "_df",
+        )
 
     def _requested_stats(self, proc: A.ProcStep) -> list:
         requested = [s for s in _STAT_EXPR if proc.options.get(s) is True]
         return requested or list(_DEFAULT_MEANS_STATS)
+
+    @staticmethod
+    def _means_combos(proc: A.ProcStep, class_list: list) -> list:
+        """CLASS-variable combinations from TYPES/WAYS statements; default
+        is the single full-interaction combo (existing behavior)."""
+        combos: list = []
+        for k, raw in proc.clauses:
+            if k == "types" and isinstance(raw, str):
+                body = re.sub(r"(?i)^\s*types\b", "", raw).strip().rstrip(";")
+                for tok in body.split():
+                    combo = [v.lower() for v in tok.split("*") if v]
+                    combo = [v for v in combo if v in class_list]
+                    if combo and combo not in combos:
+                        combos.append(combo)
+            elif k == "ways" and isinstance(raw, str):
+                body = re.sub(r"(?i)^\s*ways\b", "", raw).strip().rstrip(";")
+                for tok in body.split():
+                    try:
+                        n = int(tok.rstrip(";"))
+                    except ValueError:
+                        continue
+                    if n <= 0:
+                        if [] not in combos:
+                            combos.append([])
+                    else:
+                        for combo in itertools.combinations(class_list, min(n, len(class_list))):
+                            if list(combo) not in combos:
+                                combos.append(list(combo))
+        return combos or [class_list]
 
     def _gen_proc_means(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -860,7 +1271,8 @@ class CodeGen:
         var_clause = self._clause(proc, "var")
         output_clause = self._clause(proc, "output")
         stat_names = self._requested_stats(proc)
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         if var_clause:
             var_list = [n for n, _ in var_clause]
         else:
@@ -868,32 +1280,33 @@ class CodeGen:
             var_list = None
         vl = repr(var_list) if var_list is not None else "_var_list"
         class_list = [n for n, _ in class_clause] if class_clause else []
+        combos = self._means_combos(proc, class_list) if class_list else [[]]
 
         self.w("_rows = []")
-        if class_list:
-            self.w(f"for _key, _grp in _df.groupby({class_list!r}, dropna=False):")
+        for combo in combos:
+            if combo:
+                self.w(f"for _key, _grp in _df.groupby({combo!r}, dropna=False):")
+                self.indent += 1
+                self.w("_key = _key if isinstance(_key, tuple) else (_key,)")
+                self.w(f"_row = dict(zip({combo!r}, _key))")
+            else:
+                self.w("for _grp in [_df]:")
+                self.indent += 1
+                self.w("_row = {}")
+            self.w(f"for _v in {vl}:")
             self.indent += 1
-            self.w("_key = _key if isinstance(_key, tuple) else (_key,)")
-            self.w(f"_row = dict(zip({class_list!r}, _key))")
-        else:
-            self.w("for _grp in [_df]:")
-            self.indent += 1
-            self.w("_row = {}")
-        self.w(f"for _v in {vl}:")
-        self.indent += 1
-        self.w("_s = _grp[_v].dropna()")
-        for stat in stat_names:
-            self.w(f"_row[_v + '_{stat}'] = {_STAT_EXPR[stat]}")
-        self.indent -= 1
-        self.w("_rows.append(_row)")
-        self.indent -= 1
+            self.w("_s = _grp[_v].dropna()")
+            for stat in stat_names:
+                self.w(f"_row[_v + '_{stat}'] = {_STAT_EXPR[stat]}")
+            self.indent -= 1
+            self.w("_rows.append(_row)")
+            self.indent -= 1
 
         self.w("print(pd.DataFrame(_rows).to_string(index=False))")
         if output_clause and output_clause.get("out"):
             self._apply_output_rename(output_clause, var_list)
             out = output_clause["out"]
-            self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
-            self.last_ds_name = out
+            self._store_out(output_clause.get("out_raw"), out, "pd.DataFrame(_rows)")
 
     def _apply_output_rename(self, output_clause: dict, var_list):
         renames = {}
@@ -913,12 +1326,17 @@ class CodeGen:
 
     def _gen_proc_freq(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         tables_raw = self._clause(proc, "tables")
         if not tables_raw:
             var_clause = self._clause(proc, "var") or []
             tables_raw = " ".join(n for n, _ in var_clause)
         table_part = tables_raw.split("/")[0].strip() if tables_raw else ""
+        output_clause = self._clause(proc, "output")
+        out = output_clause.get("out") if output_clause else None
+        if out:
+            self.w("_freq_rows = []")
         for req in table_part.split():
             req = req.strip()
             if not req:
@@ -926,8 +1344,16 @@ class CodeGen:
             if "*" in req:
                 v1, v2 = [x.strip() for x in req.split("*", 1)]
                 self.w(f"print(pd.crosstab(_df[{v1!r}], _df[{v2!r}]))")
+                if out:
+                    self.w(f"_ct = pd.crosstab(_df[{v1!r}], _df[{v2!r}])")
+                    self.w(f"_freq_rows.extend({{'{v1}': i, '{v2}': c, 'count': int(n), 'percent': 100.0 * n / max(len(_df), 1)}} for (i, c), n in _ct.stack().items())")
             else:
                 self.w(f"print(_df[{req!r}].value_counts(dropna=False))")
+                if out:
+                    self.w(f"_vc = _df[{req!r}].value_counts(dropna=False)")
+                    self.w(f"_freq_rows.extend({{'{req}': k, 'count': int(v), 'percent': 100.0 * v / max(len(_df), 1)}} for k, v in _vc.items())")
+        if out:
+            self._store_out(output_clause.get("out_raw"), out, "pd.DataFrame(_freq_rows)")
 
     def _gen_proc_transpose(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -939,7 +1365,8 @@ class CodeGen:
         var_list = [n for n, _ in var_clause] if var_clause else None
         idvar = id_clause[0][0] if id_clause else None
 
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         self.w(f"_byvars = {by_vars!r}")
         self.w(f"_varlist_fixed = {var_list!r}")
         self.w(f"_idvar = {idvar!r}")
@@ -988,20 +1415,29 @@ class CodeGen:
         self.w("_row['_name_'] = _v")
         self.w("for _i, _rec in enumerate(_recs):")
         self.indent += 1
-        self.w("_row[f'col{_i + 1}'] = _rec.get(_v)")
+        stem = proc.options.get("prefix")
+        stem = stem if isinstance(stem, str) else "col"
+        delim = proc.options.get("delimiter")
+        delim = delim if isinstance(delim, str) else ""
+        suffix = proc.options.get("suffix")
+        suffix = suffix if isinstance(suffix, str) else ""
+        self.w(f"_row[{stem!r} + {delim!r} + str(_i + 1) + {suffix!r}] = _rec.get(_v)")
         self.indent -= 1
         self.w("_rows.append(_row)")
         self.indent -= 1
         self.indent -= 1
         self.indent -= 1
-        self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
-        self.last_ds_name = out
+        self._store_out(
+            proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
+            out, "pd.DataFrame(_rows)",
+        )
 
     def _gen_proc_import(self, proc: A.ProcStep):
         datafile = proc.options.get("datafile")
         out = proc.options.get("out")
         if not isinstance(datafile, str) or not isinstance(out, str):
             raise CodegenError("PROC IMPORT requires DATAFILE= and OUT=")
+        raw_out = out
         out = normalize_dsname(out)
         dbms = str(proc.options.get("dbms", "csv")).lower()
         if dbms not in ("csv", "dlm", "tab"):
@@ -1009,8 +1445,7 @@ class CodeGen:
         sep = "\t" if dbms == "tab" else ","
         self.w(f"_df = pd.read_csv({datafile!r}, sep={sep!r})")
         self.w("_df.columns = [str(c).strip().lower() for c in _df.columns]")
-        self.w(f"_DS[{out!r}] = _df")
-        self.last_ds_name = out
+        self._store_out(raw_out, out, "_df")
 
     def _gen_proc_export(self, proc: A.ProcStep):
         outfile = proc.options.get("outfile")
@@ -1021,35 +1456,62 @@ class CodeGen:
         if dbms not in ("csv", "dlm", "tab"):
             raise CodegenError(f"PROC EXPORT: DBMS={dbms.upper()} is not supported (use CSV)")
         sep = "\t" if dbms == "tab" else ","
-        self.w(f"_DS[{dsname!r}].to_csv({outfile!r}, sep={sep!r}, index=False)")
+        self.w(f"({self._proc_src(proc, dsname)}).to_csv({outfile!r}, sep={sep!r}, index=False)")
 
     def _gen_proc_datasets(self, proc: A.ProcStep):
         for (kind, payload) in proc.clauses:
             if kind == "delete":
-                for name in payload:
-                    self.w(f"_DS.pop({name!r}, None)")
-                    self.w(f"_FMT.pop({name!r}, None)")
-                    self.w(f"_LBL.pop({name!r}, None)")
+                for entry in payload:
+                    flat, raw = entry if isinstance(entry, tuple) else (entry, entry)
+                    self.w(f"_DS.pop({flat!r}, None)")
+                    self.w(f"_FMT.pop({flat!r}, None)")
+                    self.w(f"_LBL.pop({flat!r}, None)")
+                    if isinstance(raw, str) and "." in raw:
+                        lib, tbl = raw.split(".", 1)
+                        if lib.lower() in self.db_libs and lib.lower() != "work":
+                            self.w(f"_r.db_delete_table({lib.lower()!r}, {tbl.lower()!r})")
             elif kind == "change":
-                for old, new in payload:
+                for entry in payload:
+                    if len(entry) == 4:
+                        old, new, old_raw, new_raw = entry
+                    else:
+                        old, new = entry[:2]
+                        old_raw = new_raw = None
                     self.w(f"if {old!r} in _DS: _DS[{new!r}] = _DS.pop({old!r})")
                     self.w(f"if {old!r} in _FMT: _FMT[{new!r}] = _FMT.pop({old!r})")
                     self.w(f"if {old!r} in _LBL: _LBL[{new!r}] = _LBL.pop({old!r})")
                     self.last_ds_name = new
+                    if isinstance(new_raw, str) and "." in new_raw:
+                        lib, new_tbl = new_raw.split(".", 1)
+                        old_tbl = old_raw.split(".", 1)[1] if isinstance(old_raw, str) and "." in old_raw else None
+                        if lib.lower() in self.db_libs and lib.lower() != "work" and old_tbl:
+                            self.w(f"_r.db_rename_table({lib.lower()!r}, {old_tbl.lower()!r}, {new_tbl.lower()!r})")
 
     def _gen_proc_univariate(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
         var_clause = self._clause(proc, "var")
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         if var_clause:
             var_list = [n for n, _ in var_clause]
         else:
             self.w("_var_list = [c for c in _df.columns if pd.api.types.is_numeric_dtype(_df[c])]")
             var_list = None
         vl = repr(var_list) if var_list is not None else "_var_list"
+        self.w("_uni_rows = []")
         self.w(f"for _v in {vl}:")
         self.indent += 1
         self.w("_s = _df[_v].dropna()")
+        self.w("_urow = {'_varname_': _v, '_n_': len(_s),")
+        self.indent += 1
+        self.w("'_mean_': _s.mean() if len(_s) else float('nan'),")
+        self.w("'_std_': _s.std() if len(_s) > 1 else float('nan'),")
+        self.w("'_variance_': _s.var() if len(_s) > 1 else float('nan'),")
+        self.w("'_min_': _s.min() if len(_s) else float('nan'),")
+        self.w("'_max_': _s.max() if len(_s) else float('nan'),")
+        self.w("'_median_': _s.median() if len(_s) else float('nan')}")
+        self.indent -= 1
+        self.w("_uni_rows.append(_urow)")
         self.w("print(f'Variable: {_v}')")
         self.w("print('Moments:')")
         self.w("print(f'  N                {len(_s)}')")
@@ -1072,6 +1534,10 @@ class CodeGen:
         self.w("print('  highest: ' + ', '.join(str(v) for v in _sorted.tail(5).tolist()))")
         self.w("print()")
         self.indent -= 1
+        output_clause = self._clause(proc, "output")
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            self._store_out(output_clause.get("out_raw"), out, "pd.DataFrame(_uni_rows)")
 
     @staticmethod
     def _parse_model_stmt(raw: str):
@@ -1094,20 +1560,26 @@ class CodeGen:
     def _gen_proc_corr(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
         var_clause = self._clause(proc, "var")
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         if var_clause:
             cols = [n for n, _ in var_clause]
         else:
             self.w("_cols = [c for c in _df.columns if pd.api.types.is_numeric_dtype(_df[c])]")
             cols = None
         cl = repr(cols) if cols is not None else "_cols"
-        self.w(f"_corr = _r.proc_corr_report(_df, {cl})")
+        with_clause = self._clause(proc, "with")
+        with_cols = [n for n, _ in with_clause] if with_clause else None
+        if with_cols:
+            self.w(f"_corr = _r.proc_corr_with_report(_df, {cl}, {with_cols!r})")
+        else:
+            self.w(f"_corr = _r.proc_corr_report(_df, {cl})")
         out = proc.options.get("out") or proc.options.get("outp")
+        raw_out = out
         if isinstance(out, str):
             out = normalize_dsname(out)
             self.w("_corr_out = _corr.reset_index().rename(columns={'index': '_name_'})")
-            self.w(f"_DS[{out!r}] = _corr_out")
-            self.last_ds_name = out
+            self._store_out(raw_out, out, "_corr_out")
 
     def _gen_proc_reg(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -1116,7 +1588,8 @@ class CodeGen:
             raise CodegenError("PROC REG requires a MODEL statement")
         y, xs = self._parse_model_stmt(model_raw)
         output_clause = self._clause(proc, "output")
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         out_stats_lit = "None"
         out = None
         if output_clause and output_clause.get("out"):
@@ -1124,8 +1597,7 @@ class CodeGen:
             out_stats_lit = repr(self._output_stat_dict(output_clause))
         self.w(f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
         if out:
-            self.w(f"_DS[{out!r}] = _scored")
-            self.last_ds_name = out
+            self._store_out(output_clause.get("out_raw"), out, "_scored")
 
     def _gen_proc_logistic(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -1134,7 +1606,8 @@ class CodeGen:
             raise CodegenError("PROC LOGISTIC requires a MODEL statement")
         y, xs = self._parse_model_stmt(model_raw)
         output_clause = self._clause(proc, "output")
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         out_stats_lit = "None"
         out = None
         if output_clause and output_clause.get("out"):
@@ -1142,8 +1615,7 @@ class CodeGen:
             out_stats_lit = repr(self._output_stat_dict(output_clause))
         self.w(f"_scored = _r.proc_logistic_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
         if out:
-            self.w(f"_DS[{out!r}] = _scored")
-            self.last_ds_name = out
+            self._store_out(output_clause.get("out_raw"), out, "_scored")
 
     def _gen_proc_glm(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -1154,7 +1626,8 @@ class CodeGen:
         class_clause = self._clause(proc, "class")
         class_vars = [n for n, _ in class_clause] if class_clause else []
         output_clause = self._clause(proc, "output")
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         out_stats_lit = "None"
         out = None
         if output_clause and output_clause.get("out"):
@@ -1165,8 +1638,7 @@ class CodeGen:
             f"out_stats={out_stats_lit})"
         )
         if out:
-            self.w(f"_DS[{out!r}] = _scored")
-            self.last_ds_name = out
+            self._store_out(output_clause.get("out_raw"), out, "_scored")
 
     def _gen_proc_fastclus(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -1177,15 +1649,18 @@ class CodeGen:
         k = int(proc.options.get("maxclusters", 2))
         output_clause = self._clause(proc, "output")
         out = None
+        out_raw = None
         if output_clause and output_clause.get("out"):
             out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
         elif isinstance(proc.options.get("out"), str):
             out = normalize_dsname(proc.options["out"])
-        self.w(f"_df = _DS[{dsname!r}]")
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         self.w(f"_clustered = _r.proc_fastclus_fit(_df, {var_list!r}, {k})")
         if out:
-            self.w(f"_DS[{out!r}] = _clustered")
-            self.last_ds_name = out
+            self._store_out(out_raw, out, "_clustered")
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
@@ -1208,6 +1683,52 @@ class CodeGen:
             return ("analysis", stat or "sum")
         return ("display", None)
 
+    def _gen_compute_blocks(self, compute_blocks) -> None:
+        """Emit per-row COMPUTE-block execution over _rows (list of dicts):
+        each row becomes the PDV, the block's statements run via the normal
+        statement generator, and results merge back into the row (DELETE
+        inside a block drops the row)."""
+        self.w("_lag = _r.new_lag_state()")
+        self.w("_hashes = {}")
+        self.w("_kept = []")
+        self.w("for _rrow in _rows:")
+        self.indent += 1
+        self.w("pdv = dict(_rrow)")
+        self.w("try:")
+        self.indent += 1
+        for _, body in compute_blocks:
+            for st in body:
+                self.gen_stmt(st)
+        self.indent -= 1
+        self.w("except _r._RowDelete:")
+        self.indent += 1
+        self.w("continue")
+        self.indent -= 1
+        self.w("except _r._RowReturn:")
+        self.indent += 1
+        self.w("pass")
+        self.indent -= 1
+        self.w("_rrow.update(pdv)")
+        self.w("_kept.append(_rrow)")
+        self.indent -= 1
+        self.w("_rows = _kept")
+
+    def _report_breaks(self, proc: A.ProcStep) -> tuple:
+        """Return (rbreak_summarize, [break_vars]) from BREAK/RBREAK
+        ... / SUMMARIZE statements (parsed as raw-text clauses)."""
+        rbreak, breaks = False, []
+        for k, raw in proc.clauses:
+            if not isinstance(raw, str):
+                continue
+            low = raw.lower()
+            if k == "rbreak" and "summarize" in low:
+                rbreak = True
+            elif k == "break" and "summarize" in low:
+                m = re.search(r"after\s+([a-z_]\w*)", low)
+                if m:
+                    breaks.append(m.group(1))
+        return rbreak, breaks
+
     def _gen_proc_report(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
         column_clause = self._clause(proc, "column")
@@ -1229,7 +1750,11 @@ class CodeGen:
             else:
                 display_vars.append(col)
 
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        rbreak, breaks = self._report_breaks(proc)
+        breaks = [b for b in breaks if b in group_vars]
+        compute_blocks = [v for k, v in proc.clauses if k == "compute"]
         if group_vars and analysis_vars:
             self.w("_rows = []")
             self.w(f"for _key, _g in _df.groupby({group_vars!r}, dropna=False):")
@@ -1240,11 +1765,43 @@ class CodeGen:
                 method = self._REPORT_STAT_METHOD[stat]
                 self.w(f"_row[{var!r}] = _g[{var!r}].{method}()")
             self.w("_rows.append(_row)")
+            for b in breaks:
+                self.w(f"_sub = {{{b!r}: _key[{group_vars!r}.index({b!r})]}}")
+                for g2 in group_vars:
+                    if g2 != b:
+                        self.w(f"_sub[{g2!r}] = ''")
+                for var, stat in analysis_vars:
+                    method = self._REPORT_STAT_METHOD[stat]
+                    self.w(f"_sub[{var!r}] = _g[{var!r}].{method}()")
+                self.w("_rows.append(_sub)")
             self.indent -= 1
             self.w("_report_df = pd.DataFrame(_rows)")
+            if compute_blocks:
+                self._gen_compute_blocks(compute_blocks)
+                self.w("_report_df = pd.DataFrame(_rows)")
+            if rbreak:
+                self.w(f"_tot = {{{group_vars[0]!r}: 'Total'}}")
+                for g2 in group_vars[1:]:
+                    self.w(f"_tot[{g2!r}] = ''")
+                for var, stat in analysis_vars:
+                    method = self._REPORT_STAT_METHOD[stat]
+                    self.w(f"_tot[{var!r}] = _df[{var!r}].{method}()")
+                self.w("_report_df = pd.concat([_report_df, pd.DataFrame([_tot])], ignore_index=True)")
             self.w("print(_report_df.to_string(index=False))")
         else:
             self.w(f"_report_df = _df[{column_clause!r}]")
+            if compute_blocks:
+                self.w("_rows = _report_df.to_dict('records')")
+                self._gen_compute_blocks(compute_blocks)
+                self.w("_report_df = pd.DataFrame(_rows)")
+            if rbreak:
+                self.w("_numcols = [c for c in _report_df.columns if pd.api.types.is_numeric_dtype(_report_df[c])]")
+                self.w("_tot = {c: _report_df[c].sum() for c in _numcols}")
+                self.w("for c in _report_df.columns:")
+                self.indent += 1
+                self.w("_tot.setdefault(c, 'Total' if c == _report_df.columns[0] else '')")
+                self.indent -= 1
+                self.w("_report_df = pd.concat([_report_df, pd.DataFrame([_tot])], ignore_index=True)")
             self.w("_pf = _report_df.copy()")
             self.w("_pf.index = range(1, len(_pf) + 1)")
             self.w("_pf.index.name = 'Obs'")
@@ -1254,21 +1811,58 @@ class CodeGen:
     _TABULATE_STATS = {"sum": "sum", "mean": "mean", "n": "count"}
 
     @classmethod
+    def _split_tabulate_axis(cls, text: str) -> list:
+        """Split a TABLE axis on '*' but keep parenthesized stat groups
+        ('sales*(sum mean)') together as single parts."""
+        parts, buf, depth = [], "", 0
+        for c in text:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth = max(0, depth - 1)
+            if c == "*" and depth == 0:
+                if buf.strip():
+                    parts.append(buf.strip().lower())
+                buf = ""
+            else:
+                buf += c
+        if buf.strip():
+            parts.append(buf.strip().lower())
+        return parts
+
+    @classmethod
     def _parse_tabulate_axis(cls, text: str) -> tuple:
         """Parse one side of a TABLE row, col statement: a plain class var
-        ('rowvar'), or class-var(s) chained with an analysis var and a
-        trailing stat keyword via '*' ('colvar*analysisvar*mean'). Returns
-        (class_vars, analysis_var_or_None, stat_or_None). Only this shape
-        is supported -- no nested groupings within one axis, no multiple
-        stats per cell, no PCTN/other TABULATE-specific statistics."""
-        parts = [p.strip().lower() for p in text.split("*") if p.strip()]
-        stat = None
+        ('rowvar'), or class-var(s) chained with an analysis var and stat
+        keyword(s) via '*' ('colvar*analysisvar*mean', leading-stat
+        'colvar*mean*analysisvar', or multi-stat 'colvar*(sum mean)').
+        Returns (class_vars, analysis_var_or_None, stats_list). Only this
+        shape is supported -- no nested groupings within one axis, no
+        PCTN/other TABULATE-specific statistics."""
+        parts = cls._split_tabulate_axis(text)
+        stats: list = []
+        rest = []
+        for p in parts:
+            if p.startswith("(") and p.endswith(")"):
+                for tok in p[1:-1].split():
+                    if tok in cls._TABULATE_STATS and tok not in stats:
+                        stats.append(tok)
+            else:
+                rest.append(p)
+        parts = rest
         if parts and parts[-1] in cls._TABULATE_STATS:
             stat = parts.pop()
+            if stat not in stats:
+                stats.append(stat)
+        elif len(parts) >= 2 and parts[-2] in cls._TABULATE_STATS:
+            # leading-stat form: class*stat*analysis
+            stat = parts.pop(-2)
+            if stat not in stats:
+                stats.append(stat)
         analysis_var = None
-        if stat and parts:
+        if stats and parts:
             analysis_var = parts.pop()
-        return parts, analysis_var, stat
+        return parts, analysis_var, stats
 
     def _gen_proc_tabulate(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
@@ -1279,10 +1873,10 @@ class CodeGen:
             row_text, col_text = table_raw.split(",", 1)
         else:
             row_text, col_text = table_raw, ""
-        row_classes, row_var, row_stat = self._parse_tabulate_axis(row_text)
-        col_classes, col_var, col_stat = self._parse_tabulate_axis(col_text)
+        row_classes, row_var, row_stats = self._parse_tabulate_axis(row_text)
+        col_classes, col_var, col_stats = self._parse_tabulate_axis(col_text)
         analysis_var = row_var or col_var
-        stat = row_stat or col_stat or "sum"
+        stats = row_stats or col_stats or ["sum"]
         if not analysis_var:
             var_clause = self._clause(proc, "var")
             analysis_var = var_clause[0][0] if var_clause else None
@@ -1291,25 +1885,30 @@ class CodeGen:
                 "PROC TABULATE: could not determine the analysis variable "
                 "(add a VAR statement, or var*stat on one TABLE axis)"
             )
-        aggfunc = self._TABULATE_STATS.get(stat, "sum")
 
-        self.w(f"_df = _DS[{dsname!r}]")
-        self.w(
-            f"_piv = pd.pivot_table(_df, values={analysis_var!r}, "
-            f"index={row_classes!r} or None, columns={col_classes!r} or None, "
-            f"aggfunc={aggfunc!r})"
-        )
-        self.w("_piv.columns.name = None")
-        self.w("print(_piv.to_string())")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w("_tab_outs = []")
+        for stat in stats:
+            aggfunc = self._TABULATE_STATS.get(stat, "sum")
+            self.w(f"print('--- {stat.upper()} ---')")
+            self.w(
+                f"_piv = pd.pivot_table(_df, values={analysis_var!r}, "
+                f"index={row_classes!r} or None, columns={col_classes!r} or None, "
+                f"aggfunc={aggfunc!r})"
+            )
+            self.w("_piv.columns.name = None")
+            self.w("print(_piv.to_string())")
+            self.w(f"_t = _piv.reset_index(); _t['_stat_'] = {stat!r}; _tab_outs.append(_t)")
         out = proc.options.get("out")
         if isinstance(out, str):
             out_name = normalize_dsname(out)
-            self.w(f"_DS[{out_name!r}] = _piv.reset_index()")
-            self.last_ds_name = out_name
+            self.w("_piv_out = pd.concat(_tab_outs, ignore_index=True)")
+            self._store_out(out, out_name, "_piv_out")
 
     # ---- PROC SGPLOT ----
     _SGPLOT_KV_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)")
-    _SGPLOT_KINDS = ("scatter", "series", "vbar", "histogram")
+    _SGPLOT_KINDS = ("scatter", "series", "vbar", "hbar", "histogram", "density", "refline")
 
     def _parse_sgplot_stmt(self, ckw: str, raw: str) -> dict:
         kv = {k.lower(): v.lower() for k, v in self._SGPLOT_KV_RE.findall(raw)}
@@ -1317,17 +1916,21 @@ class CodeGen:
             if "x" not in kv or "y" not in kv:
                 raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires X= and Y=")
             return {"kind": ckw, "x": kv["x"], "y": kv["y"]}
-        if ckw == "vbar":
+        if ckw in ("vbar", "hbar"):
             body = raw.split("/", 1)[0]
-            m = re.search(r"vbar\s+([A-Za-z_]\w*)", body, re.I)
+            m = re.search(r"(?:vbar|hbar)\s+([A-Za-z_]\w*)", body, re.I)
             if not m:
-                raise CodegenError("PROC SGPLOT VBAR requires a category variable")
-            return {"kind": "vbar", "category": m.group(1).lower(), "response": kv.get("response")}
-        if ckw == "histogram":
-            m = re.search(r"histogram\s+([A-Za-z_]\w*)", raw, re.I)
+                raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires a category variable")
+            return {"kind": ckw, "category": m.group(1).lower(), "response": kv.get("response")}
+        if ckw in ("histogram", "density"):
+            m = re.search(r"(?:histogram|density)\s+([A-Za-z_]\w*)", raw, re.I)
             if not m:
-                raise CodegenError("PROC SGPLOT HISTOGRAM requires a variable")
-            return {"kind": "histogram", "var": m.group(1).lower()}
+                raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires a variable")
+            return {"kind": ckw, "var": m.group(1).lower()}
+        if ckw == "refline":
+            body = raw.split("/", 1)[0]
+            vals = [float(v) for v in re.findall(r"-?\d+\.?\d*(?:[eE][+-]?\d+)?", body)]
+            return {"kind": ckw, "values": vals}
         raise CodegenError(f"unrecognized PROC SGPLOT statement: {ckw!r}")
 
     def _gen_proc_sgplot(self, proc: A.ProcStep):
@@ -1339,14 +1942,15 @@ class CodeGen:
         ]
         if not plots:
             raise CodegenError(
-                "PROC SGPLOT requires at least one SCATTER/SERIES/VBAR/HISTOGRAM statement"
+                "PROC SGPLOT requires at least one SCATTER/SERIES/VBAR/HBAR/HISTOGRAM/DENSITY/REFLINE statement"
             )
         self.sgplot_counter += 1
         out_path = proc.options.get("out")
         if not isinstance(out_path, str):
             out_path = f"sgplot_{self.sgplot_counter}.png"
         title = proc.options.get("title") if isinstance(proc.options.get("title"), str) else None
-        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
         self.w(f"_r.proc_sgplot_render(_df, {plots!r}, {out_path!r}, title={title!r})")
 
     def _gen_proc_rank(self, proc: A.ProcStep):
@@ -1361,24 +1965,51 @@ class CodeGen:
         by_clause = self._clause(proc, "by")
         ascending = not proc.options.get("descending")
 
-        self.w(f"_df = _DS[{dsname!r}].copy()")
+        self.w(f"_df = ({self._proc_src(proc, dsname)}).copy()")
+        self._gen_proc_filters(proc)
+        groups = proc.options.get("groups")
+        ngroups = None
+        if isinstance(groups, (int, float)) or (isinstance(groups, str) and str(groups).isdigit()):
+            ngroups = int(groups)
         if by_clause:
             by_list = [n for n, _ in by_clause]
             self.w(f"_rank_src = _df.groupby({by_list!r}, dropna=False)[{var_list!r}]")
         else:
             self.w(f"_rank_src = _df[{var_list!r}]")
-        self.w(f"_ranked = _rank_src.rank(method='average', ascending={ascending!r}, na_option='keep')")
+        if ngroups:
+            # GROUPS=n: 0-based ntile buckets from the average ranks
+            self.w(f"_ranked = _rank_src.rank(method='average', ascending={ascending!r}, na_option='keep')")
+            self.w(f"_ranked = (((_ranked - 1) * {ngroups} // _ranked.count()).clip(upper={ngroups - 1}).astype('Int64'))")
+        else:
+            self.w(f"_ranked = _rank_src.rank(method='average', ascending={ascending!r}, na_option='keep')")
         for v, rn in zip(var_list, rank_names):
             self.w(f"_df[{rn!r}] = _ranked[{v!r}]")
-        self.w(f"_DS[{out!r}] = _df")
-        self.last_ds_name = out
+        self._store_out(
+            proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
+            out, "_df",
+        )
+
+    def _opt_src(self, raw: str | None, flat: str) -> str:
+        """Like _proc_src but for BASE=/DATA= style options carrying a raw
+        dotted name plus its normalized flat name."""
+        if isinstance(raw, str) and "." in raw:
+            lib, tbl = raw.split(".", 1)
+            if lib.lower() in self.db_libs and lib.lower() != "work":
+                return f"_r.db_read_table({lib.lower()!r}, {tbl.lower()!r})"
+        return f"_DS[{flat!r}]"
 
     def _gen_proc_append(self, proc: A.ProcStep):
-        base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None
-        data = normalize_dsname(proc.options["data"]) if isinstance(proc.options.get("data"), str) else None
+        base_raw = proc.options.get("base") if isinstance(proc.options.get("base"), str) else None
+        data_raw = proc.options.get("data") if isinstance(proc.options.get("data"), str) else None
+        base = normalize_dsname(base_raw) if base_raw else None
+        data = normalize_dsname(data_raw) if data_raw else None
         if not base or not data:
             raise CodegenError("PROC APPEND requires BASE= and DATA=")
-        self.w(f"_DS[{base!r}] = pd.concat([_DS[{base!r}], _DS[{data!r}]], ignore_index=True)")
+        self.w(f"_DS[{base!r}] = pd.concat([{self._opt_src(base_raw, base)}, {self._opt_src(data_raw, data)}], ignore_index=True)")
+        if isinstance(base_raw, str) and "." in base_raw:
+            lib, tbl = base_raw.split(".", 1)
+            if lib.lower() in self.db_libs and lib.lower() != "work":
+                self.w(f"_r.db_write_table({lib.lower()!r}, {tbl.lower()!r}, _DS[{base!r}])")
         self.last_ds_name = base
 
 

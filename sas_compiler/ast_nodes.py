@@ -213,10 +213,78 @@ class ExprStmt(Stmt):
 
 
 @dataclass
+class SelectStmt(Stmt):
+    """SELECT [expr]; WHEN (v1, ...) stmt; ... [OTHERWISE stmt;] END;"""
+    select_expr: Expr | None  # None means bare SELECT (WHEN holds conditions)
+    whens: list  # [(conds: list[Expr], body: list)]
+    otherwise: list = field(default_factory=list)
+
+
+@dataclass
+class StopStmt(Stmt):
+    pass
+
+
+@dataclass
+class LeaveStmt(Stmt):
+    pass
+
+
+@dataclass
+class ContinueStmt(Stmt):
+    pass
+
+
+@dataclass
+class UpdateStmt(Stmt):
+    datasets: list
+    by: list = field(default_factory=list)
+
+
+@dataclass
+class InfileStmt(Stmt):
+    """INFILE "path" [DLM=..] [DSD] [FIRSTOBS=n] [OBS=n] [TRUNCOVER/MISSOVER]."""
+    path: str
+    dlm: str | None = None
+    dsd: bool = False
+    firstobs: int = 1
+    obs: int | None = None
+    truncover: bool = False
+
+
+@dataclass
+class FileStmt(Stmt):
+    """FILE "path" [MOD] [DLM=..] -- redirects PUT output for the DATA step.
+    The reserved filerefs LOG/PRINT write to stdout."""
+    path: str
+    mod: bool = False
+    dlm: str | None = None
+
+
+@dataclass
+class AbortStmt(Stmt):
+    message: str | None = None
+
+
+@dataclass
 class DeclareHashStmt(Stmt):
     """declare hash <name>(args); -- args e.g. [("dataset", Str("lookup"))]."""
     hashname: str
     args: list  # [(argname_or_None, Expr)]
+
+
+@dataclass
+class DeclareHiterStmt(Stmt):
+    """declare hiter <itername>("hashname"); -- hash iterator object."""
+    itername: str
+    hashname: str
+
+
+@dataclass
+class TitleStmt(Stmt):
+    """TITLE/FOOTNOTE statement: printed atop/below PROC PRINT output."""
+    text: str
+    kind: str  # 'title' or 'footnote'
 
 
 # ---------------- top-level steps ----------------

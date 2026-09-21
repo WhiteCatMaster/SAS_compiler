@@ -8,6 +8,8 @@ data customers;
 ;
 run;
 
+proc print data=customers; run;
+
 data orders;
   input id amount;
   datalines;
@@ -19,8 +21,13 @@ data orders;
 ;
 run;
 
+proc print data=orders; run;
+
 proc sort data=customers out=customers_s; by id; run;
+proc print data=customers_s; run;
+
 proc sort data=orders out=orders_s; by id; run;
+proc print data=orders_s; run;
 
 data merged;
   merge customers_s(in=a) orders_s(in=b);
@@ -48,6 +55,8 @@ proc print data=filtered; run;
 proc freq data=customers;
   tables region;
 run;
+
+proc print data=customers(obs=2); run;
 
 data loopdemo;
   x = 0;

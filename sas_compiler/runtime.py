@@ -7,6 +7,7 @@ calls into this module.
 """
 from __future__ import annotations
 
+import csv
 import math
 import re
 from datetime import date, timedelta
@@ -47,6 +48,10 @@ class _RowDelete(Exception):
 
 
 class _RowReturn(Exception):
+    pass
+
+
+class _DataStop(Exception):
     pass
 
 
@@ -262,12 +267,120 @@ def tranwrd(s, target, repl):
     return sas_text(s).replace(sas_text(target), sas_text(repl))
 
 
+def translate(s, to, frm):
+    """TRANSLATE(s, to, from): replace each char of `from` with the
+    corresponding char of `to` (extra `to` chars ignored, missing ones
+    delete the character)."""
+    s, to, frm = sas_text(s), sas_text(to), sas_text(frm)
+    table = {}
+    for i, c in enumerate(frm):
+        table[c] = to[i] if i < len(to) else ""
+    return "".join(table.get(c, c) for c in s)
+
+
+def verify(s, chars):
+    """VERIFY(s, chars): 1-based position of the first char of s not in
+    chars; 0 when every char is in chars (or s is empty)."""
+    s = sas_text(s)
+    for i, c in enumerate(s):
+        if c not in chars:
+            return i + 1
+    return 0
+
+
+def prxmatch(pattern, source):
+    """PRXMATCH('/re/flags', source): 1-based position of the first regex
+    match, or 0 when nothing matches. Only the trailing-i (IGNORECASE)
+    flag is honored."""
+    pat = sas_text(pattern)
+    flags = 0
+    m = re.match(r"^/(.*)/([a-zA-Z]*)$", pat, re.S)
+    if m:
+        pat, flagstr = m.group(1), m.group(2).lower()
+        if "i" in flagstr:
+            flags |= re.IGNORECASE
+    try:
+        hit = re.search(pat, sas_text(source), flags)
+    except re.error:
+        return 0.0
+    return float(hit.start() + 1) if hit else 0.0
+
+
 def indexc(s, chars):
     s = sas_text(s)
     for i, c in enumerate(s):
         if c in chars:
             return i + 1
     return 0
+
+
+def compbl(s):
+    """COMPBL: every run of 2+ blanks becomes a single blank."""
+    return re.sub(r" {2,}", " ", sas_text(s))
+
+
+def reverse_(s):
+    return sas_text(s)[::-1]
+
+
+def quote_(s, q='"'):
+    s, q = sas_text(s), sas_text(q)[:1] or '"'
+    return q + s.replace(q, q + q) + q
+
+
+def dequote(s):
+    s = sas_text(s)
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1].replace(s[0] * 2, s[0])
+    return s
+
+
+def findc(s, chars, modifiers=None, start=None):
+    """FINDC(s, chars): 1-based position of the first char of s found in
+    chars (0 when none). Modifiers: 'i' ignores case. A negative `start`
+    searches right-to-left and returns a negative position."""
+    s = sas_text(s)
+    if isinstance(modifiers, str) and "i" in modifiers.lower():
+        s, chars = s.lower(), sas_text(chars).lower()
+    else:
+        chars = sas_text(chars)
+    try:
+        pos = int(start) if start is not None else 1
+    except (TypeError, ValueError):
+        pos = 1
+    if pos >= 1:
+        for i in range(pos - 1, len(s)):
+            if s[i] in chars:
+                return i + 1
+        return 0
+    for i in range(len(s) + pos, -1, -1):
+        if 0 <= i < len(s) and s[i] in chars:
+            return -(i + 1)
+    return 0
+
+
+def findw(s, word, delims=None, modifiers=None, start=None):
+    """FINDW(s, word): 1-based character position where `word` appears as a
+    whole word (delimited); 0 when absent. Approximation of SAS's default
+    delimiter set when `delims` is omitted; negative `start` is treated
+    as 1 (forward search)."""
+    s = sas_text(s)
+    word = sas_text(word)
+    d = sas_text(delims) if delims is not None else " .,;:-/()[]{}'\"_=+*^~!?|\\\t"
+    mods = sas_text(modifiers).lower() if modifiers is not None else ""
+    flags = re.IGNORECASE if "i" in mods else 0
+    try:
+        pos = int(start) if start is not None else 1
+    except (TypeError, ValueError):
+        pos = 1
+    if pos < 1:
+        pos = 1
+    seq = s[pos - 1:]
+    dc = re.escape(d)
+    m = re.search(r"(?:(?<=^)|(?<=[" + dc + r"]))" + re.escape(word) + r"(?:(?=$)|(?=[" + dc + r"]))", seq, flags)
+    if not m:
+        return 0
+    return pos + m.start()
 
 
 # ---------------- numeric functions ----------------
@@ -467,7 +580,17 @@ def apply_format(value, fmt: str) -> str:
     except (TypeError, ValueError):
         return sas_str(value)
 
-    if name in ("date", "mmddyy", "yymmdd", "ddmmyy", "worddate"):
+    if name in ("date", "mmddyy", "yymmdd", "ddmmyy", "worddate", "time", "datetime"):
+        if name == "time":
+            t = _to_time(v)
+            if not t:
+                return "."
+            return f"{t[0]:02d}:{t[1]:02d}:{t[2]:02d}"
+        if name == "datetime":
+            d = _to_datetime(v)
+            if not d:
+                return "."
+            return d.strftime("%d%b%Y:%H:%M:%S").upper()
         d = _to_date(v)
         if not d:
             return "."
@@ -503,10 +626,42 @@ def today():
     return float((date.today() - SAS_EPOCH).days)
 
 
+def time_():
+    from datetime import datetime as _dt
+
+    now = _dt.now()
+    return float(now.hour * 3600 + now.minute * 60 + now.second)
+
+
+def datetime_():
+    from datetime import datetime as _dt
+
+    return float((_dt.now() - _dt(1960, 1, 1)).total_seconds())
+
+
 def sas_date(y, m, d):
     try:
         return float((date(int(y), int(m), int(d)) - SAS_EPOCH).days)
     except ValueError:
+        return MISSING
+
+
+def sas_time(h, m, s=0):
+    try:
+        h, m, s = int(h), int(m), int(s)
+    except (TypeError, ValueError):
+        return MISSING
+    if not (0 <= h <= 23 and 0 <= m <= 59 and 0 <= s <= 59):
+        return MISSING
+    return float(h * 3600 + m * 60 + s)
+
+
+def sas_datetime(y, mo, d, h=0, mi=0, s=0):
+    try:
+        from datetime import datetime as _dt
+
+        return float((_dt(int(y), int(mo), int(d), int(h), int(mi), int(s)) - _dt(1960, 1, 1)).total_seconds())
+    except (TypeError, ValueError):
         return MISSING
 
 
@@ -516,8 +671,67 @@ def _to_date(sasnum):
     return SAS_EPOCH + timedelta(days=int(sasnum))
 
 
+def _to_time(sastime):
+    """SAS time (seconds since midnight) -> (h, m, s), or None if missing."""
+    if is_missing(sastime):
+        return None
+    total = int(sastime) % 86400
+    return total // 3600, (total % 3600) // 60, total % 60
+
+
+def _to_datetime(sasdt):
+    """SAS datetime (seconds since 1960-01-01) -> datetime, or None."""
+    if is_missing(sasdt):
+        return None
+    from datetime import datetime as _dt
+
+    return _dt(1960, 1, 1) + timedelta(seconds=float(sasdt))
+
+
 def datepart(dt_val):
-    return dt_val
+    if is_missing(dt_val):
+        return MISSING
+    return float(int(float(dt_val) // 86400))
+
+
+def timepart(dt_val):
+    if is_missing(dt_val):
+        return MISSING
+    return float(float(dt_val) % 86400)
+
+
+def dhms(d, h, m, s):
+    if any(is_missing(v) for v in (d, h, m, s)):
+        return MISSING
+    return float(float(d) * 86400 + float(h) * 3600 + float(m) * 60 + float(s))
+
+
+def hms(h, m, s):
+    return sas_time(h, m, s)
+
+
+def hour_(sasdt):
+    d = _to_datetime(sasdt)
+    if d is None:
+        t = _to_time(sasdt)
+        return float(t[0]) if t else MISSING
+    return float(d.hour)
+
+
+def minute_(sasdt):
+    d = _to_datetime(sasdt)
+    if d is None:
+        t = _to_time(sasdt)
+        return float(t[1]) if t else MISSING
+    return float(d.minute)
+
+
+def second_(sasdt):
+    d = _to_datetime(sasdt)
+    if d is None:
+        t = _to_time(sasdt)
+        return float(t[2]) if t else MISSING
+    return float(d.second)
 
 
 def year_(sasnum):
@@ -551,6 +765,10 @@ def intck(interval, start, end):
         return float((d2 - d1).days // 7)
     if interval == "month":
         return float((d2.year - d1.year) * 12 + (d2.month - d1.month))
+    if interval in ("qtr", "quarter"):
+        return float((d2.year - d1.year) * 4 + ((d2.month - 1) // 3 - (d1.month - 1) // 3))
+    if interval in ("semiyear", "halfyear"):
+        return float((d2.year - d1.year) * 2 + ((d2.month - 1) // 6 - (d1.month - 1) // 6))
     if interval == "year":
         return float(d2.year - d1.year)
     return MISSING
@@ -571,6 +789,14 @@ def intnx(interval, start, n, alignment=None):
         y, m = divmod(total, 12)
         day = 1
         d2 = date(y, m + 1, day)
+    elif interval in ("qtr", "quarter"):
+        total = d.year * 4 + (d.month - 1) // 3 + n
+        y, q = divmod(total, 4)
+        d2 = date(y, q * 3 + 1, 1)
+    elif interval in ("semiyear", "halfyear"):
+        total = d.year * 2 + (d.month - 1) // 6 + n
+        y, h = divmod(total, 2)
+        d2 = date(y, h * 6 + 1, 1)
     elif interval == "year":
         d2 = date(d.year + n, d.month, 1)
     else:
@@ -597,6 +823,17 @@ class _LagQueues:
 
 def new_lag_state():
     return _LagQueues()
+
+
+def dif_(lag_state, key, value, depth=1):
+    """DIF(x): x minus its lagged value (missing when the lag is missing)."""
+    prev = lag_state.lag(key, value, depth)
+    if is_missing(prev) or is_missing(value):
+        return MISSING
+    try:
+        return float(value) - float(prev)
+    except (TypeError, ValueError):
+        return MISSING
 
 
 # ---------------- dataset construction / BY-group iteration ----------------
@@ -720,8 +957,97 @@ def iter_merge_by(named_dfs, by_vars):
             yield merged, flags
 
 
+def iter_update_by(named_dfs, by_vars):
+    """SAS UPDATE semantics: first dataset is the master, the rest are
+    transactions applied in order. For each BY key, start from the master
+    row (if any) and overlay each transaction row's non-missing values;
+    emit exactly one row per BY key."""
+    grouped = []
+    for name, df, in_flag in named_dfs:
+        g: dict = {}
+        for row in _records(df):
+            k = _by_key(row, by_vars)
+            g.setdefault(k, []).append(row)
+        grouped.append((name, g, in_flag))
+
+    all_keys = set()
+    for _, g, _ in grouped:
+        all_keys.update(g.keys())
+
+    def sort_key(k):
+        return [_num_rank(v) if not isinstance(v, str) else v for v in k]
+
+    sorted_keys = sorted(all_keys, key=sort_key)
+    n = len(sorted_keys)
+    for i, key in enumerate(sorted_keys):
+        merged: dict = {}
+        for v in by_vars:
+            merged[v] = key[by_vars.index(v)]
+        for idx, (name, g, in_flag) in enumerate(grouped):
+            rows_for_key = g.get(key)
+            present = rows_for_key is not None
+            if present:
+                if idx == 0:
+                    merged.update(rows_for_key[-1])
+                else:
+                    for trow in rows_for_key:
+                        for col, val in trow.items():
+                            if col in by_vars:
+                                continue
+                            if not is_missing(val):
+                                merged[col] = val
+            if in_flag:
+                merged[in_flag] = present
+        flags = {}
+        for j, v in enumerate(by_vars):
+            prev_key = sorted_keys[i - 1] if i > 0 else None
+            next_key = sorted_keys[i + 1] if i < n - 1 else None
+            flags[v] = (
+                _key_changed_prefix(prev_key, key, j),
+                _key_changed_prefix(key, next_key, j) if next_key is not None else True,
+            )
+        yield merged, flags
+
+
 def iter_once():
     yield {}, {}
+
+
+def read_infile(path, varspec, dlm=None, dsd=False, firstobs=1, obs=None):
+    """Read a raw text file for INFILE + INPUT (list input).
+
+    varspec: [(name, is_char), ...]. Blank lines are skipped; FIRSTOBS/OBS
+    select 1-based physical records before blank-line filtering. Without
+    DSD, consecutive delimiters collapse; with DSD (csv parsing), empty
+    fields and quoted values are honored. Short lines are padded with
+    missing (MISSOVER behavior)."""
+    with open(path, "r", newline="") as f:
+        lines = f.read().splitlines()
+    lo = max(int(firstobs or 1) - 1, 0)
+    hi = int(obs) if obs is not None else None
+    lines = lines[lo:hi]
+    rows = []
+    for line in lines:
+        if line.strip() == "":
+            continue
+        if dlm is None:
+            fields = line.split()
+        elif dsd:
+            fields = next(csv.reader([line], delimiter=dlm, skipinitialspace=True))
+        else:
+            fields = [p.strip() for p in line.split(dlm) if p.strip() != ""]
+        row = {}
+        for i, (name, is_char) in enumerate(varspec):
+            raw = fields[i] if i < len(fields) else ""
+            if is_char:
+                row[name] = raw
+            else:
+                try:
+                    row[name] = float(raw)
+                except ValueError:
+                    row[name] = MISSING
+        rows.append(row)
+    return rows
 
 
 # ---------------- output finalization ----------------
@@ -783,6 +1109,39 @@ def proc_corr_report(df: pd.DataFrame, cols: list):
     return corr
 
 
+def proc_corr_with_report(df: pd.DataFrame, cols: list, with_cols: list):
+    """PROC CORR with a WITH statement: Pearson r (and p-value) of each
+    VAR variable against each WITH variable. Returns the r DataFrame
+    (index=VAR vars, columns=WITH vars)."""
+    from scipy import stats as _stats
+
+    allc = list(dict.fromkeys(cols + with_cols))
+    sub = df[allc].apply(pd.to_numeric, errors="coerce")
+    print(f"Variables: {'  '.join(cols)}")
+    print(f"With Variables: {'  '.join(with_cols)}")
+    print()
+    width = max(10, max(len(c) for c in allc) + 2)
+    print("".rjust(width) + "".join(c.rjust(width) for c in with_cols))
+    out = pd.DataFrame(index=cols, columns=with_cols, dtype=float)
+    for c1 in cols:
+        rvals, pvals = [], []
+        for c2 in with_cols:
+            pair = sub[[c1, c2]].dropna()
+            if c1 == c2:
+                r, p = 1.0, 0.0
+            elif len(pair) < 2:
+                r, p = float("nan"), float("nan")
+            else:
+                r, p = _stats.pearsonr(pair[c1], pair[c2])
+            out.loc[c1, c2] = r
+            rvals.append(r)
+            pvals.append(p)
+        print(c1.rjust(width) + "".join(f"{v:.4f}".rjust(width) for v in rvals))
+        print("".rjust(width) + "".join(f"<{p:.4f}>".rjust(width) for p in pvals))
+    print()
+    return out
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual
@@ -832,8 +1191,10 @@ DB_LIBS: dict = {}
 
 
 def libname(libref: str, conn: str):
-    """Register a LIBNAME connection: either a plain SQLite file path, or
-    a full SQLAlchemy URL (postgresql://, mysql://, ...)."""
+    """Register a LIBNAME connection: a plain SQLite file path, a full
+    SQLAlchemy URL (postgresql://, mysql://, ...), or a directory path --
+    in which case libref.table resolves to <table>.sas7bdat / <table>.csv
+    files inside that directory."""
     DB_LIBS[libref.lower()] = conn
 
 
@@ -841,10 +1202,69 @@ def libname_clear(libref: str):
     DB_LIBS.pop(libref.lower(), None)
 
 
+def _decode_dir_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a directory-backed table: bytes -> str, lowercase columns."""
+    for c in list(df.columns):
+        if df[c].dtype == object:
+            df[c] = df[c].map(lambda v: v.decode() if isinstance(v, (bytes, bytearray)) else v)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+
+
+def _dir_table_path(conn: str, table: str) -> str | None:
+    """Find libref.table inside a directory lib: .sas7bdat first, then .csv."""
+    import os
+
+    for ext in (".sas7bdat", ".csv"):
+        for cand in (table + ext, table.lower() + ext, table.upper() + ext):
+            p = os.path.join(conn, cand)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def sql_attach_dir(con, libref: str, conn: str):
+    """Expose every table in a directory libref as libref.table views in a
+    duckdb connection (via CREATE SCHEMA + per-table views), so PROC SQL
+    can query real files with plain `libref.table` references."""
+    import os
+
+    libref = libref.lower()
+    try:
+        con.execute(f'CREATE SCHEMA IF NOT EXISTS "{libref}"')
+        for fn in sorted(os.listdir(conn)):
+            low = fn.lower()
+            if low.endswith(".sas7bdat"):
+                table, df = fn[:-9].lower(), _decode_dir_frame(pd.read_sas(os.path.join(conn, fn)))
+            elif low.endswith(".csv"):
+                table, df = fn[:-4].lower(), _decode_dir_frame(pd.read_csv(os.path.join(conn, fn)))
+            else:
+                continue
+            if not table.replace("_", "").isalnum():
+                continue
+            reg = f"_saslib_{libref}_{table}"
+            con.register(reg, df)
+            con.execute(f'CREATE OR REPLACE VIEW "{libref}"."{table}" AS SELECT * FROM "{reg}"')
+    except Exception as e:
+        print(f"warning: could not attach directory library {libref!r}: {e}")
+
+
 def db_read_table(libref: str, table: str) -> pd.DataFrame:
     conn = DB_LIBS.get(libref.lower())
     if conn is None:
         raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    import os
+
+    if os.path.isdir(conn):
+        path = _dir_table_path(conn, table)
+        if path is None:
+            raise RuntimeError(
+                f"LIBNAME {libref!r} directory {conn!r} has no table {table!r} "
+                f"(looked for {table}.sas7bdat / {table}.csv)"
+            )
+        if path.lower().endswith(".csv"):
+            return _decode_dir_frame(pd.read_csv(path))
+        return _decode_dir_frame(pd.read_sas(path))
     if "://" in conn:
         import sqlalchemy
         engine = sqlalchemy.create_engine(conn)
@@ -864,6 +1284,11 @@ def db_write_table(libref: str, table: str, df: pd.DataFrame, if_exists: str = "
     conn = DB_LIBS.get(libref.lower())
     if conn is None:
         raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    import os
+
+    if os.path.isdir(conn):
+        df.to_csv(os.path.join(conn, table.lower() + ".csv"), index=False)
+        return
     if "://" in conn:
         import sqlalchemy
         engine = sqlalchemy.create_engine(conn)
@@ -876,6 +1301,83 @@ def db_write_table(libref: str, table: str, df: pd.DataFrame, if_exists: str = "
             con.commit()
         finally:
             con.close()
+
+
+def db_delete_table(libref: str, table: str):
+    """PROC DATASETS DELETE for a LIBNAME table: remove the backing file(s)
+    (directory lib) or DROP TABLE (SQLite / server lib). Warns instead of
+    raising when there is nothing to delete."""
+    conn = DB_LIBS.get(libref.lower())
+    if conn is None:
+        raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    import os
+
+    if os.path.isdir(conn):
+        removed = False
+        for fn in os.listdir(conn):
+            low = fn.lower()
+            if low in (table.lower() + ".sas7bdat", table.lower() + ".csv"):
+                try:
+                    os.remove(os.path.join(conn, fn))
+                    removed = True
+                except OSError as e:
+                    print(f"warning: could not delete {fn!r}: {e}")
+        if not removed:
+            print(f"warning: LIBNAME {libref!r} has no table {table!r} to delete")
+        return
+    if "://" in conn:
+        import sqlalchemy
+        try:
+            with sqlalchemy.create_engine(conn).begin() as c:
+                c.exec_driver_sql(f'DROP TABLE IF EXISTS "{table}"')
+        except Exception as e:
+            print(f"warning: could not delete {libref}.{table}: {e}")
+        return
+    import sqlite3
+    con = sqlite3.connect(conn)
+    try:
+        con.execute(f'DROP TABLE IF EXISTS "{table}"')
+        con.commit()
+    finally:
+        con.close()
+
+
+def db_rename_table(libref: str, old: str, new: str):
+    """PROC DATASETS CHANGE for a LIBNAME table: rename the backing file
+    (directory lib) or ALTER TABLE ... RENAME (SQLite / server lib)."""
+    conn = DB_LIBS.get(libref.lower())
+    if conn is None:
+        raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    import os
+
+    if os.path.isdir(conn):
+        path = _dir_table_path(conn, old)
+        if path is None:
+            print(f"warning: LIBNAME {libref!r} has no table {old!r} to rename")
+            return
+        ext = ".csv" if path.lower().endswith(".csv") else ".sas7bdat"
+        try:
+            os.rename(path, os.path.join(conn, new.lower() + ext))
+        except OSError as e:
+            print(f"warning: could not rename {old!r} to {new!r}: {e}")
+        return
+    if "://" in conn:
+        import sqlalchemy
+        try:
+            with sqlalchemy.create_engine(conn).begin() as c:
+                c.exec_driver_sql(f'ALTER TABLE "{old}" RENAME TO "{new}"')
+        except Exception as e:
+            print(f"warning: could not rename {libref}.{old}: {e}")
+        return
+    import sqlite3
+    con = sqlite3.connect(conn)
+    try:
+        con.execute(f'ALTER TABLE "{old}" RENAME TO "{new}"')
+        con.commit()
+    except Exception as e:
+        print(f"warning: could not rename {libref}.{old}: {e}")
+    finally:
+        con.close()
 
 
 # ---------------- statistical PROCs (GLM / FASTCLUS) ----------------
@@ -978,10 +1480,39 @@ def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str 
                 ylabel = "Count"
             ax.bar([str(v) for v in agg.index], agg.values)
             xlabel = cat
+        elif kind == "hbar":
+            cat = p["category"]
+            if p.get("response"):
+                agg = df.groupby(cat, dropna=False)[p["response"]].sum()
+                xlabel = p["response"]
+            else:
+                agg = df[cat].value_counts()
+                xlabel = "Count"
+            ax.barh([str(v) for v in agg.index], agg.values)
+            ylabel = cat
         elif kind == "histogram":
             var = p["var"]
             ax.hist(df[var].dropna())
             xlabel, ylabel = var, "Count"
+        elif kind == "density":
+            var = p["var"]
+            sub = pd.to_numeric(df[var], errors="coerce").dropna()
+            if len(sub) > 1 and sub.nunique() > 1:
+                try:
+                    from scipy.stats import gaussian_kde as _kde
+
+                    xs = pd.Series(
+                        [sub.min() + (sub.max() - sub.min()) * i / 199 for i in range(200)]
+                    )
+                    ax.plot(xs, _kde(sub)(xs))
+                except Exception:
+                    ax.hist(sub, density=True)
+            else:
+                ax.hist(sub, density=True)
+            xlabel, ylabel = var, "Density"
+        elif kind == "refline":
+            for v in p.get("values", []):
+                ax.axvline(v)
         else:
             raise ValueError(f"unsupported PROC SGPLOT statement kind: {kind!r}")
     if xlabel:
@@ -1002,12 +1533,14 @@ class SasHash:
     """A DATA step HASH object: fast key -> data lookup, built either from
     a source dataset (`declare hash h(dataset: "lookup");`) or grown
     dynamically via .add(). Keys are stored as tuples of the raw (missing-
-    aware) key values; data is stored as a dict of {varname: value}."""
+    aware) key values; data is stored as a dict of {varname: value}. With
+    MULTIDATA:'Y', each key maps to a *list* of data dicts (one per row)."""
 
-    def __init__(self, source_df: "pd.DataFrame | None" = None):
+    def __init__(self, source_df: "pd.DataFrame | None" = None, multi: bool = False):
         self.keys: list = []
         self.datas: list = []
         self.table: dict = {}
+        self.multi = multi
         self._source_df = source_df
 
     def definekey(self, *names):
@@ -1016,13 +1549,19 @@ class SasHash:
     def definedata(self, *names):
         self.datas.extend(n.lower() for n in names)
 
+    def _store(self, key, data):
+        if self.multi:
+            self.table.setdefault(key, []).append(data)
+        else:
+            self.table[key] = data
+
     def definedone(self):
         if self._source_df is None:
             return
         for row in self._source_df.to_dict("records"):
             key = tuple(row.get(k, MISSING) for k in self.keys)
             data = {d: row.get(d, MISSING) for d in self.datas}
-            self.table[key] = data
+            self._store(key, data)
         self._source_df = None
 
     def _current_key(self, pdv: dict, key_values=None) -> tuple:
@@ -1030,8 +1569,14 @@ class SasHash:
             return tuple(key_values)
         return tuple(pdv.get(k, MISSING) for k in self.keys)
 
+    def _first_entry(self, key):
+        entry = self.table.get(key)
+        if entry is None:
+            return None
+        return entry[0] if self.multi else entry
+
     def find(self, pdv: dict, key_values=None) -> float:
-        entry = self.table.get(self._current_key(pdv, key_values))
+        entry = self._first_entry(self._current_key(pdv, key_values))
         if entry is None:
             return 1.0
         for d, v in entry.items():
@@ -1044,7 +1589,7 @@ class SasHash:
 
     def add(self, pdv: dict, key_values=None) -> float:
         key = self._current_key(pdv, key_values)
-        self.table[key] = {d: pdv.get(d, MISSING) for d in self.datas}
+        self._store(key, {d: pdv.get(d, MISSING) for d in self.datas})
         return 0.0
 
     def remove(self, pdv: dict, key_values=None) -> float:
@@ -1057,3 +1602,72 @@ class SasHash:
 
     def __len__(self):
         return len(self.table)
+
+    def _cursor(self) -> "SasHIter":
+        if getattr(self, "_cursor_iter", None) is None:
+            self._cursor_iter = SasHIter(self)
+        return self._cursor_iter
+
+    def first(self, pdv: dict) -> float:
+        """Sequential walk over all items (also available on the hash
+        object itself for convenience; SAS proper uses an HITER object)."""
+        return self._cursor().first(pdv)
+
+    def last(self, pdv: dict) -> float:
+        return self._cursor().last(pdv)
+
+    def next(self, pdv: dict) -> float:
+        return self._cursor().next(pdv)
+
+    def prev(self, pdv: dict) -> float:
+        return self._cursor().prev(pdv)
+
+    def ordered_items(self):
+        """All (key, data) pairs in insertion order, expanding MULTIDATA
+        lists -- backs the HITER iterator object."""
+        items = []
+        for key, entry in self.table.items():
+            if self.multi:
+                items.extend((key, data) for data in entry)
+            else:
+                items.append((key, entry))
+        return items
+
+
+class SasHIter:
+    """A DATA step hash iterator object (DECLARE HITER): sequential
+    FIRST()/NEXT()/PREV()/LAST() walks over its hash object's items,
+    copying key+data values into the PDV. Returns 0.0 on success,
+    1.0 when the walk runs off either end."""
+
+    def __init__(self, sas_hash: SasHash | None = None):
+        self.hash = sas_hash
+        self.idx: int | None = None
+
+    def _items(self):
+        return self.hash.ordered_items() if self.hash is not None else []
+
+    def _load(self, pdv: dict, i: int) -> float:
+        items = self._items()
+        if not items or i < 0 or i >= len(items):
+            return 1.0
+        self.idx = i
+        (key, data) = items[i]
+        if self.hash is not None:
+            for k, v in zip(self.hash.keys, key):
+                pdv[k] = v
+        for d, v in data.items():
+            pdv[d] = v
+        return 0.0
+
+    def first(self, pdv: dict) -> float:
+        return self._load(pdv, 0)
+
+    def last(self, pdv: dict) -> float:
+        return self._load(pdv, len(self._items()) - 1)
+
+    def next(self, pdv: dict) -> float:
+        return self._load(pdv, 0 if self.idx is None else self.idx + 1)
+
+    def prev(self, pdv: dict) -> float:
+        return self._load(pdv, len(self._items()) - 1 if self.idx is None else self.idx - 1)

@@ -1,4 +1,5 @@
 """Tokenizer for (macro-expanded) SAS source."""
+
 from __future__ import annotations
 
 import re
@@ -34,9 +35,11 @@ _SINGLE_OPS = set("+-*/=<>()., ;")
 
 class Lexer:
     def __init__(self, text: str):
-        self.text = text
+        # A UTF-8 BOM at the start of the file must not become a token;
+        # otherwise the first statement (e.g. LIBNAME) is silently skipped.
+        self.text = text.lstrip("\ufeff")
         self.pos = 0
-        self.n = len(text)
+        self.n = len(self.text)
 
     def tokenize(self) -> list[Token]:
         toks = []
@@ -54,7 +57,7 @@ class Lexer:
             if c in " \t\r\n":
                 self.pos += 1
                 continue
-            if c == "/" and text[self.pos:self.pos + 2] == "/*":
+            if c == "/" and text[self.pos : self.pos + 2] == "/*":
                 j = text.find("*/", self.pos + 2)
                 self.pos = (j + 2) if j != -1 else self.n
                 continue
@@ -73,7 +76,7 @@ class Lexer:
             buf = []
             while self.pos < self.n:
                 if text[self.pos] == c:
-                    if text[self.pos:self.pos + 2] == c * 2:
+                    if text[self.pos : self.pos + 2] == c * 2:
                         buf.append(c)
                         self.pos += 2
                         continue
@@ -83,13 +86,15 @@ class Lexer:
                 self.pos += 1
             return Token(TokType.STRING, "".join(buf), start)
 
-        if c.isdigit() or (c == "." and self.pos + 1 < self.n and text[self.pos + 1].isdigit()):
-            m = re.match(r"\d*\.?\d+([eE][+-]?\d+)?", text[self.pos:])
+        if c.isdigit() or (
+            c == "." and self.pos + 1 < self.n and text[self.pos + 1].isdigit()
+        ):
+            m = re.match(r"\d*\.?\d+([eE][+-]?\d+)?", text[self.pos :])
             self.pos += m.end()
             return Token(TokType.NUMBER, m.group(0), start)
 
         if c.isalpha() or c == "_":
-            m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[self.pos:])
+            m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[self.pos :])
             self.pos += m.end()
             word = m.group(0)
             return Token(TokType.IDENT, word, start)
@@ -108,7 +113,7 @@ class Lexer:
             return Token(TokType.COMMA, ",", start)
 
         for op in ["**", "<=", ">=", "^=", "~=", "||", "!!"]:
-            if text[self.pos:self.pos + len(op)] == op:
+            if text[self.pos : self.pos + len(op)] == op:
                 self.pos += len(op)
                 return Token(TokType.OP, op, start)
 

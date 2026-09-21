@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date as _date
 
 from .lexer import Lexer, Token, TokType
 from . import ast_nodes as A
@@ -13,6 +14,69 @@ class ParseError(Exception):
 
 _CMP_WORDS = {"eq": "=", "ne": "^=", "lt": "<", "gt": ">", "le": "<=", "ge": ">="}
 
+# SAS epoch: date literals ('01JAN2010'd) count days since 1960-01-01.
+_SAS_EPOCH_ORD = _date(1960, 1, 1).toordinal()
+_MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def parse_sas_date_literal(text: str) -> float | None:
+    """Parse a DATE9-style literal body ('01JAN2010', '1Jan60') into a SAS
+    date number (days since 1960-01-01). Returns None if it doesn't match."""
+    m = re.match(r"^(\d{1,2})([A-Za-z]{3})(\d{2,4})$", text.strip())
+    if not m:
+        return None
+    day, mon, year = int(m.group(1)), _MONTH_ABBR.get(m.group(2).lower()), m.group(3)
+    if mon is None:
+        return None
+    year = int(year)
+    if year < 100:
+        # SAS YEARCUTOFF sliding window equivalent (default cutoff 1926).
+        year += 2000 if year < 26 else 1900
+    try:
+        return float(_date(year, mon, day).toordinal() - _SAS_EPOCH_ORD)
+    except ValueError:
+        return None
+
+
+def parse_sas_time_literal(text: str) -> float | None:
+    """Parse a TIME literal body ('12:34', '12:34:56') into SAS time
+    (seconds since midnight). Returns None if it doesn't match."""
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$", text.strip())
+    if not m:
+        return None
+    h, mi, s = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+    if h > 23 or mi > 59 or s > 59:
+        return None
+    return float(h * 3600 + mi * 60 + s)
+
+
+def parse_sas_datetime_literal(text: str) -> float | None:
+    """Parse a DATETIME literal body ('01JAN2010:12:34:56') into SAS
+    datetime (seconds since 1960-01-01 00:00). Returns None if no match."""
+    m = re.match(
+        r"^(\d{1,2})([A-Za-z]{3})(\d{2,4}):(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$",
+        text.strip(),
+    )
+    if not m:
+        return None
+    day, mon = int(m.group(1)), _MONTH_ABBR.get(m.group(2).lower())
+    if mon is None:
+        return None
+    year = int(m.group(3))
+    if year < 100:
+        year += 2000 if year < 26 else 1900
+    h, mi, s = int(m.group(4)), int(m.group(5)), int(m.group(6) or 0)
+    try:
+        days = _date(year, mon, day).toordinal() - _SAS_EPOCH_ORD
+    except ValueError:
+        return None
+    if h > 23 or mi > 59 or s > 59:
+        return None
+    return float(days * 86400 + h * 3600 + mi * 60 + s)
+
 
 def normalize_dsname(name: str) -> str:
     parts = name.split(".")
@@ -23,8 +87,13 @@ def normalize_dsname(name: str) -> str:
 
 class Parser:
     def __init__(self, source: str):
-        self.source = source
-        self.toks = Lexer(source).tokenize()
+        # The lexer strips a leading BOM for tokenizing; source slices
+        # (error snippets, DATALINES bodies, PROC SQL raw text, date-literal
+        # adjacency checks) must use the same stripped text so token
+        # positions line up.
+        _lexer = Lexer(source)
+        self.source = _lexer.text
+        self.toks = _lexer.tokenize()
         self.i = 0
         self.db_librefs: set = set()  # librefs registered via LIBNAME, tracked
         # in parse order so later SET/MERGE/DATA-step-output references to
@@ -99,14 +168,32 @@ class Parser:
                 steps.append(self.parse_proc_step())
             elif self.is_kw("libname"):
                 steps.append(self.parse_libname())
+            elif self.peek().type == TokType.IDENT and re.match(
+                r"^(title|footnote)\d*$", self.peek().value.lower()
+            ):
+                steps.append(self.parse_title())
             elif self.peek().type == TokType.SEMI:
                 self.advance()
             else:
-                # stray token (e.g. leftover libname/options/title statement) -
+                # stray token (e.g. leftover libname/options statement) -
                 # skip the whole statement
                 self.skip_to_semi()
             self.skip_semis()
         return A.Program(steps=steps)
+
+    def parse_title(self) -> A.TitleStmt:
+        kind = self.advance().value.lower()
+        kind = "footnote" if kind.startswith("footnote") else "title"
+        text = ""
+        if self.peek().type == TokType.STRING:
+            text = self.advance().value
+        else:
+            parts = []
+            while self.peek().type not in (TokType.SEMI, TokType.EOF):
+                parts.append(self.advance().value)
+            text = " ".join(parts)
+        self.skip_to_semi()
+        return A.TitleStmt(text=text, kind=kind)
 
     def parse_libname(self) -> A.LibnameStmt:
         self.advance()  # 'libname'
@@ -199,8 +286,11 @@ class Parser:
                         opts["where"] = self.parse_expr()
                 elif key == "in":
                     opts["in_flag"] = self.advance().value.lower()
+                elif key in ("point", "nobs", "firstobs", "obs"):
+                    if self.peek().type not in (TokType.RPAREN,):
+                        opts[key] = self.advance().value
                 else:
-                    # obs=, firstobs=, etc: consume one value token and ignore
+                    # unknown option: consume one value token and ignore
                     if self.peek().type not in (TokType.RPAREN,):
                         self.advance()
             else:
@@ -248,6 +338,7 @@ class Parser:
         dispatch = {
             "set": self._parse_set,
             "merge": self._parse_merge,
+            "update": self._parse_update,
             "by": self._parse_by,
             "array": self._parse_array,
             "retain": self._parse_retain,
@@ -259,10 +350,17 @@ class Parser:
             "output": self._parse_output,
             "if": self._parse_if,
             "do": self._parse_do,
+            "select": self._parse_select,
+            "stop": self._parse_stop,
+            "leave": self._parse_leave,
+            "continue": self._parse_continue,
             "where": self._parse_where,
             "put": self._parse_put,
             "call": self._parse_call,
             "input": self._parse_input,
+            "infile": self._parse_infile,
+            "file": self._parse_file,
+            "abort": self._parse_abort,
             "datalines": self._parse_datalines,
             "cards": self._parse_datalines,
             "delete": self._parse_delete,
@@ -309,6 +407,28 @@ class Parser:
         self.advance()  # 'declare'
         if self.is_kw("hash"):
             self.advance()
+            hashname = self.advance().value.lower()
+            args = []
+            if self.peek().type == TokType.LPAREN:
+                args = self._parse_named_arg_list()
+            self.skip_to_semi()
+            return A.DeclareHashStmt(hashname=hashname, args=args)
+        if self.is_kw("hiter"):
+            self.advance()
+            itername = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
+            hashname = ""
+            if self.peek().type == TokType.LPAREN:
+                self.advance()
+                if self.peek().type == TokType.STRING:
+                    hashname = self.advance().value.lower()
+                elif self.peek().type == TokType.IDENT:
+                    hashname = self.advance().value.lower()
+                while self.peek().type not in (TokType.RPAREN, TokType.EOF):
+                    self.advance()
+                if self.peek().type == TokType.RPAREN:
+                    self.advance()
+            self.skip_to_semi()
+            return A.DeclareHiterStmt(itername=itername, hashname=hashname)
         hashname = self.advance().value.lower()
         args = []
         if self.peek().type == TokType.LPAREN:
@@ -317,16 +437,33 @@ class Parser:
         return A.DeclareHashStmt(hashname=hashname, args=args)
 
     # ---- individual statement parsers ----
+    # SET-statement-level options (valid with or without parens, e.g.
+    # `set s point=p nobs=n end=eof`); other key= tokens end the list.
+    _SET_STMT_OPTS = ("point", "nobs", "end", "firstobs", "obs", "key")
+
     def _parse_set(self):
         self.advance()
         datasets = []
-        while self.peek().type == TokType.IDENT:
+        while self.peek().type == TokType.IDENT and not (
+            self.peek(1).type == TokType.OP and self.peek(1).value == "="
+        ):
             name = self._read_dotted_name()
             opts = {}
             if self.peek().type == TokType.LPAREN:
                 opts = self._parse_dataset_options()
             flat, db_info = self._resolve_ds_ref(name)
             datasets.append((flat, opts, db_info))
+        # bare SET-statement options attach to the last dataset read
+        while (
+            self.peek().type == TokType.IDENT
+            and self.peek(1).type == TokType.OP
+            and self.peek(1).value == "="
+            and self.peek().value.lower() in self._SET_STMT_OPTS
+            and datasets
+        ):
+            key = self.advance().value.lower()
+            self.advance()  # '='
+            datasets[-1][1][key] = self.advance().value
         self.skip_to_semi()
         return A.SetStmt(datasets=datasets)
 
@@ -342,6 +479,34 @@ class Parser:
             datasets.append((flat, opts, db_info))
         self.skip_to_semi()
         return A.MergeStmt(datasets=datasets, by=[])
+
+    def _parse_update(self):
+        self.advance()
+        datasets = []
+        while self.peek().type == TokType.IDENT:
+            name = self._read_dotted_name()
+            opts = {}
+            if self.peek().type == TokType.LPAREN:
+                opts = self._parse_dataset_options()
+            flat, db_info = self._resolve_ds_ref(name)
+            datasets.append((flat, opts, db_info))
+        self.skip_to_semi()
+        return A.UpdateStmt(datasets=datasets, by=[])
+
+    def _parse_stop(self):
+        self.advance()
+        self.skip_to_semi()
+        return A.StopStmt()
+
+    def _parse_leave(self):
+        self.advance()
+        self.skip_to_semi()
+        return A.LeaveStmt()
+
+    def _parse_continue(self):
+        self.advance()
+        self.skip_to_semi()
+        return A.ContinueStmt()
 
     def _read_dotted_name(self) -> str:
         parts = [self.advance().value]
@@ -706,6 +871,50 @@ class Parser:
             self.skip_to_semi()
         return A.DoBlock(kind="block", var=None, start=None, stop=None, by=None, cond=None, body=body)
 
+    def _parse_select(self):
+        self.advance()  # 'select'
+        select_expr = None
+        if self.peek().type == TokType.LPAREN:
+            self.advance()
+            select_expr = self.parse_expr()
+            if self.peek().type == TokType.RPAREN:
+                self.advance()
+        self.skip_to_semi()
+        whens = []
+        otherwise: list = []
+        while not self.at_eof():
+            self.skip_semis()
+            if self.is_kw("end"):
+                self.advance()
+                self.skip_to_semi()
+                break
+            if self.is_kw("when"):
+                self.advance()
+                conds: list = []
+                if self.peek().type == TokType.LPAREN:
+                    self.advance()
+                    while self.peek().type != TokType.RPAREN and self.peek().type != TokType.EOF:
+                        conds.append(self.parse_expr())
+                        if self.peek().type == TokType.COMMA:
+                            self.advance()
+                    if self.peek().type == TokType.RPAREN:
+                        self.advance()
+                # a WHEN body is a single statement (usually DO...END)
+                body = self._parse_branch_body()
+                # consume the ';' terminating that statement if still pending
+                if self.peek().type == TokType.SEMI:
+                    self.advance()
+                whens.append((conds, body))
+                continue
+            if self.is_kw("otherwise"):
+                self.advance()
+                otherwise = self._parse_branch_body()
+                if self.peek().type == TokType.SEMI:
+                    self.advance()
+                continue
+            break
+        return A.SelectStmt(select_expr=select_expr, whens=whens, otherwise=otherwise)
+
     def _parse_where(self):
         self.advance()
         cond = self.parse_expr()
@@ -754,6 +963,101 @@ class Parser:
             varlist.append((name, is_char))
         self.skip_to_semi()
         return A.InputStmt(vars=varlist)
+
+    def _parse_infile(self):
+        self.advance()  # 'infile'
+        if self.peek().type == TokType.STRING:
+            path = self.advance().value
+        elif self.peek().type == TokType.IDENT:
+            path = self.advance().value
+        else:
+            path = ""
+        dlm = None
+        dsd = False
+        firstobs = 1
+        obs = None
+        truncover = False
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            if self.peek().type == TokType.IDENT:
+                key = self.advance().value.lower()
+                if self.peek().type == TokType.OP and self.peek().value == "=":
+                    self.advance()
+                    if key in ("dlm", "delimiter"):
+                        if self.peek().type == TokType.STRING:
+                            v = self.advance().value
+                            dlm = v[0] if v else None
+                        elif self.peek().type != TokType.SEMI:
+                            v = self.advance().value
+                            dlm = v[0] if v else None
+                    elif key in ("firstobs",):
+                        if self.peek().type == TokType.NUMBER:
+                            firstobs = max(int(float(self.advance().value)), 1)
+                        else:
+                            self.advance()
+                    elif key in ("obs", "lastobs"):
+                        if self.peek().type == TokType.NUMBER:
+                            obs = int(float(self.advance().value))
+                        else:
+                            self.advance()
+                    else:
+                        # lrecl=, etc: consume one value token and ignore
+                        if self.peek().type not in (TokType.SEMI,):
+                            self.advance()
+                else:
+                    if key == "dsd":
+                        dsd = True
+                    elif key in ("truncover", "missover"):
+                        truncover = True
+                    # pad/flowover/lastobs n without '=' and friends: ignore
+            else:
+                self.advance()
+        self.skip_to_semi()
+        return A.InfileStmt(path=path, dlm=dlm, dsd=dsd, firstobs=firstobs,
+                            obs=obs, truncover=truncover)
+
+    def _parse_file(self):
+        self.advance()  # 'file'
+        if self.peek().type == TokType.STRING:
+            path = self.advance().value
+        elif self.peek().type == TokType.IDENT:
+            path = self.advance().value
+        else:
+            path = ""
+        mod = False
+        dlm = None
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            if self.peek().type == TokType.IDENT:
+                key = self.advance().value.lower()
+                if self.peek().type == TokType.OP and self.peek().value == "=":
+                    self.advance()
+                    if key in ("dlm", "delimiter"):
+                        if self.peek().type == TokType.STRING:
+                            v = self.advance().value
+                            dlm = v[0] if v else None
+                        elif self.peek().type != TokType.SEMI:
+                            v = self.advance().value
+                            dlm = v[0] if v else None
+                    elif self.peek().type not in (TokType.SEMI,):
+                        self.advance()
+                else:
+                    if key == "mod":
+                        mod = True
+            else:
+                self.advance()
+        self.skip_to_semi()
+        return A.FileStmt(path=path, mod=mod, dlm=dlm)
+
+    def _parse_abort(self):
+        self.advance()  # 'abort'
+        msg = None
+        # ABORT CANCEL "msg"; / ABORT RETURN ... / ABORT "msg";
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            if self.peek().type == TokType.STRING:
+                msg = self.advance().value
+            else:
+                self.advance()
+        self.skip_to_semi()
+        return A.AbortStmt(message=msg)
 
     def _parse_datalines(self):
         # find raw text from current token's source position up to a line
@@ -919,6 +1223,22 @@ class Parser:
             return A.Num(float(t.value))
         if t.type == TokType.STRING:
             self.advance()
+            # SAS date/time/datetime literals: '01JAN2010'd, '12:34't,
+            # '01JAN2010:12:34:56'dt -- the suffix must immediately follow
+            # the closing quote (char right before it is the quote itself).
+            nxt = self.peek()
+            if nxt.type == TokType.IDENT and nxt.pos > 0 and self.source[nxt.pos - 1] in ("'", '"'):
+                suffix = nxt.value.lower()
+                sasnum = None
+                if suffix == "d":
+                    sasnum = parse_sas_date_literal(t.value)
+                elif suffix == "t":
+                    sasnum = parse_sas_time_literal(t.value)
+                elif suffix == "dt":
+                    sasnum = parse_sas_datetime_literal(t.value)
+                if sasnum is not None:
+                    self.advance()
+                    return A.Num(sasnum)
             return A.Str(t.value)
         if t.type == TokType.OP and t.value == ".":
             self.advance()
@@ -987,7 +1307,13 @@ class Parser:
                 val = self._read_dotted_name() if self.peek().type == TokType.IDENT else self.advance().value
                 options[key] = val
             elif self.peek().type == TokType.IDENT:
-                options[self.advance().value.lower()] = True
+                flag = self.advance().value
+                if flag.lower() == "data":
+                    raise self._err(
+                        f"PROC {name.upper()} has bare 'DATA' with no '=' "
+                        f"(did you mean DATA=...? e.g. 'DATA+...' is not valid SAS)"
+                    )
+                options[flag.lower()] = True
             else:
                 self.advance()
         self.skip_to_semi()
@@ -1007,21 +1333,26 @@ class Parser:
                 self.advance()
                 names = []
                 while self.peek().type == TokType.IDENT:
-                    names.append(self.advance().value.lower())
+                    raw = self._read_dotted_name()
+                    names.append((normalize_dsname(raw), raw))
                 clauses.append(("delete", names))
                 self.skip_to_semi()
             elif name == "datasets" and ckw in ("change", "rename"):
                 self.advance()
                 pairs = []
                 while self.peek().type == TokType.IDENT:
-                    old = self.advance().value.lower()
+                    old_raw = self._read_dotted_name()
                     if self.peek().type == TokType.OP and self.peek().value == "=":
                         self.advance()
-                    new = self.advance().value.lower() if self.peek().type == TokType.IDENT else old
-                    pairs.append((old, new))
+                    if self.peek().type == TokType.IDENT:
+                        new_raw = self._read_dotted_name()
+                    else:
+                        new_raw = old_raw
+                    pairs.append((normalize_dsname(old_raw), normalize_dsname(new_raw),
+                                  old_raw, new_raw))
                 clauses.append(("change", pairs))
                 self.skip_to_semi()
-            elif ckw in ("var", "by", "class", "id", "freq"):
+            elif ckw in ("var", "by", "class", "id", "freq", "with"):
                 self.advance()
                 names = []
                 while self.peek().type == TokType.IDENT:
@@ -1063,6 +1394,19 @@ class Parser:
                 if raw.endswith(";"):
                     raw = raw[:-1]
                 clauses.append(("model", raw.strip()))
+            elif name == "report" and ckw == "compute":
+                self.advance()
+                start = self.peek().pos
+                self.skip_to_semi()
+                end_tok_pos = self.peek().pos
+                target = self.source[start:end_tok_pos].strip()
+                if target.endswith(";"):
+                    target = target[:-1]
+                body = self._parse_stmt_list(stop_kws={"endcomp"})
+                if self.is_kw("endcomp"):
+                    self.advance()
+                    self.skip_to_semi()
+                clauses.append(("compute", (target.strip(), body)))
             elif name == "report" and ckw == "column":
                 self.advance()
                 names = []
@@ -1111,7 +1455,9 @@ class Parser:
                 key = self.advance().value.lower()
                 self.advance()
                 if key == "out":
-                    info["out"] = normalize_dsname(self._read_dotted_name())
+                    raw = self._read_dotted_name()
+                    info["out"] = normalize_dsname(raw)
+                    info["out_raw"] = raw
                     continue
                 var = None
                 if self.peek().type == TokType.LPAREN:

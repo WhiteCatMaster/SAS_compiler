@@ -76,40 +76,67 @@ names, explicit bounds via `array x{2020:2023}`, and `_TEMPORARY_`
 lookup arrays) plus `DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`,
 `RETAIN`, the sum statement
 (`var + expr;`), `DO`/`DO WHILE`/`DO UNTIL`/iterative `DO`, `IF`/`THEN`/
-`ELSE` and subsetting `IF`, `OUTPUT` (single or multiple output datasets),
+`ELSE` and subsetting `IF`, `SELECT (expr); WHEN (...) ...; OTHERWISE ...; END;`
+(both value-list and bare-condition forms), `STOP`/`LEAVE`/`CONTINUE` (with
+correct `CONTINUE` semantics inside iterative and `DO UNTIL` loops),
+`UPDATE master trans; BY ...;` (non-missing transaction values overlay the
+master, one output row per BY group), `OUTPUT` (single or multiple output datasets),
 `DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
-`INPUT`/`DATALINES`/`CARDS`, `DELETE`, `RETURN`, `LABEL` (shown as
+`INPUT`/`DATALINES`/`CARDS`, `INFILE "path" [DLM=..] [DSD] [FIRSTOBS=n]
+[OBS=n]` for external text files (short lines padded MISSOVER-style),
+`FILE "path" [MOD]` redirecting `PUT` to a file (`FILE LOG`/`PRINT` stay on
+stdout), `ABORT ["msg"]`, `DELETE`, `RETURN`, `LABEL` (shown as
 `PROC PRINT` column headers), the `_N_` automatic row counter, a HASH
 object for key-based lookups (`DECLARE HASH h(DATASET: "ds")`,
 `.DEFINEKEY()`/`.DEFINEDATA()`/`.DEFINEDONE()`, `.FIND()`/`.ADD()`/
 `.REMOVE()`/`.CHECK()`, with `KEY: expr` arguments or the current PDV's
-key-variable values when omitted), and a broad function library (string,
-numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
+key-variable values when omitted), date/time/datetime literals
+(`'01JAN2010'd`, `'12:34't`, `'01JAN2010:12:34:56'dt`), `TITLE`/`FOOTNOTE`
+(shown on `PROC PRINT` output), and
+a broad function library (string,
+numeric, date, `LAG`, `DIF`, `IFN`/`IFC`, `COALESCE`,
+`TRANSLATE`, `VERIFY`, `PRXMATCH`, `COMPBL`, `REVERSE`, `QUOTE`,
+`DEQUOTE`, `FINDC`, `FINDW`, etc).
 
-**PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
-`SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
-`OUTPUT OUT=`, and explicit stat keywords — `N MEAN STD MIN MAX SUM
+**PROC steps:** `PRINT` (with an `Obs` column (or `ID` values) and
+`FORMAT`-aware display,
+plus `VAR`, `WHERE`, `OBS=`/`FIRSTOBS=`, `NOOBS`, and a `SUM` totals row),
+`CONTENTS` (NOBS plus variable names/types), `SORT` (`BY`, `OUT=`,
+`NODUPKEY`, `NODUP`/`NODUPRECS`, `DUPOUT=`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
+`OUTPUT OUT=`, explicit stat keywords — `N MEAN STD MIN MAX SUM
 MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
-default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
-`TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
-(CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE`),
-`UNIVARIATE` (moments, mode, quantiles, extreme observations —
-printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
-`DESCENDING`, average-rank ties), `FORMAT` (see below), `GLM`, `FASTCLUS`
-(see below), `REPORT` (`COLUMN`/`DEFINE ... / GROUP|ANALYSIS stat|DISPLAY`
+default — plus `TYPES`/`WAYS` class-combination control), `FREQ` (one-way
+and two-way `TABLES`, one- and two-way `OUTPUT OUT=`
+count/percent datasets), `APPEND`,
+`TRANSPOSE` (`BY`/`VAR`, with or without `ID`, `PREFIX=`/`SUFFIX=`/`DELIMITER=`), `IMPORT`/`EXPORT`
+(CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE` —
+including `libref.table` file/table renames and drops),
+`UNIVARIATE` (moments, mode, quantiles, extreme observations, plus an
+optional `OUTPUT OUT=` moments dataset), `RANK` (`VAR`/`RANKS`/`BY`,
+`DESCENDING`, average-rank ties, `GROUPS=` ntile buckets),
+`TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via `FORMAT` (see below), `GLM`, `FASTCLUS`
+(see below), `REPORT` (`COLUMN`/`DEFINE ... / GROUP|ANALYSIS stat|DISPLAY|COMPUTED`
 — grouped-and-summarized when a `GROUP` and an `ANALYSIS` variable are
-both defined, else a plain listing of the `COLUMN` variables),
+both defined, else a plain listing of the `COLUMN` variables — plus
+`COMPUTE`/`ENDCOMP` row blocks and
+`BREAK`/`RBREAK ... / SUMMARIZE` subtotal/total rows),
 `TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via
-`SUM`/`MEAN`/`N`, with an optional `OUT=`), `SGPLOT` (`SCATTER`,
-`SERIES`, `VBAR` with or without `RESPONSE=`, `HISTOGRAM` — multiple
+`SUM`/`MEAN`/`N` in either `var*stat` or `stat*var` order, multi-stat
+`var*(sum mean)` cells, with an
+optional `OUT=` stacked with a `_stat_` column), `SGPLOT` (`SCATTER`,
+`SERIES`, `VBAR`/`HBAR` with or without `RESPONSE=`, `HISTOGRAM`,
+`DENSITY`, `REFLINE` — multiple
 plot statements overlay onto one figure; saved to a PNG via
 `OUT="path.png"`, or a default `sgplot_N.png` if omitted, since there's
 no interactive display here), and `SQL` — SQL statements are executed
 almost verbatim against duckdb with all current datasets registered as
 views, so most standard SQL (joins, GROUP BY/HAVING, window functions,
-CTEs) works without any special-casing here.
+CTEs) works without any special-casing here. A `WHERE` statement and the
+`OBS=`/`FIRSTOBS=` dataset options are honored by every PROC that reads
+a `DATA=` dataset.
 
-**Statistics / ML:** `CORR` (Pearson r and p-value matrix, plus an
+**Statistics / ML:** `CORR` (Pearson r and p-value matrix, `WITH`
+rectangular form, plus an
 optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
 statsmodels — full summary with R², F-stat, coefficient table, and
 `OUTPUT OUT= P=/R=` for predicted values / residuals), `LOGISTIC`
@@ -125,7 +152,9 @@ printed cluster-frequency/cluster-means summary). `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, and `GLM`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
-libref to an actual SQLite database file, or `LIBNAME libref
+libref to an actual SQLite database file, `LIBNAME libref
+"path/to/dir/";` to a directory (where `libref.table` resolves to
+`table.sas7bdat` or `table.csv` inside it), or `LIBNAME libref
 "postgresql://user:pass@host/db";` (any SQLAlchemy URL) to a real
 server. `SET libref.table;` / `MERGE libref.table ...;` reads real rows
 from it; `DATA libref.table; ... run;` writes the result back to a real
@@ -170,19 +199,27 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   runs, it cannot feed back into `%IF`/`%DO` control flow the way real
   SAS's interleaved macro/DATA-step execution can.
 - The **HASH object** covers single- or multi-key lookups built from a
-  `DATASET:` or grown via `.ADD()`, but not `MULTIDATA:` (multiple data
-  rows per key), iteration methods (`.FIRST()`/`.NEXT()`), `.OUTPUT()`,
-  or a companion hash iterator object.
-- Only `SET`/`MERGE`/`WHERE`/`INPUT`/`DATALINES` at the **top level** of
-  a DATA step are supported (not nested inside `IF`/`DO`); table-lookup
-  patterns like `SET ds POINT=;` aren't implemented.
-- A `LIBNAME`-backed table can only be read/written via `SET`/`MERGE`/a
-  DATA step's own output list, or (SQLite only) directly in `PROC SQL`.
-  A PROC's own `DATA=`/`OUT=` doesn't resolve a libref table directly —
-  stage it into a `work.` dataset with a `SET` first.
+  `DATASET:` or grown via `.ADD()`, `MULTIDATA:'Y'` (multiple data rows
+  per key), sequential `.FIRST()`/`.NEXT()`/`.PREV()`/`.LAST()` walks,
+  and a companion hash iterator object (`DECLARE HITER hi("h")`), but
+  not `.OUTPUT()`.
+- `SET` nested inside `IF`/`DO` supports a single dataset with sequential
+  cursor reads or `POINT=` random access, plus `NOBS=`/`END=`; other
+  statements (`MERGE`/`UPDATE`/`WHERE`/`INPUT`/`INFILE`/`FILE`/`DATALINES`)
+  stay top-level-only, and `SET ... KEY=` index lookups aren't implemented.
+- **INFILE** covers list input only (no column/pointer controls like `@n`,
+  `/`, or informats) with one file per DATA step; short lines are padded
+  MISSOVER-style (no FLOWOVER). **FILE** supports one output file per DATA
+  step (last `FILE` wins); `PUT ... FILE=` per-statement routing isn't
+  implemented.
+- A `LIBNAME`-backed table can be read via `SET`/`MERGE`/a
+  DATA step's own output list, any PROC's `DATA=`/`OUT=`, `PROC APPEND`,
+  `PROC IMPORT`, `PROC EXPORT`, and `PROC SQL` (SQLite files are `ATTACH`ed
+  into duckdb; directories are exposed as `libref.table` views; server-URL
+  libraries have their referenced `libref.table`s staged as views).
 - Formats affect display (`PROC PRINT`, `PUT()`) but not the underlying
   stored value.
-- PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
+- PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`SQL` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
