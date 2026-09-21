@@ -945,3 +945,53 @@ def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
     result = df.loc[mask].copy()
     result["cluster"] = labels
     return result
+
+
+# ---------------- PROC SGPLOT ----------------
+def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
+    """Render one or more overlaid SGPLOT-style plot statements onto a
+    single figure and save it as a PNG (there is no interactive display
+    in this environment, so PROC SGPLOT always writes to a file)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    xlabel = ylabel = None
+    for p in plots:
+        kind = p["kind"]
+        if kind == "scatter":
+            sub = df[[p["x"], p["y"]]].dropna()
+            ax.scatter(sub[p["x"]], sub[p["y"]])
+            xlabel, ylabel = p["x"], p["y"]
+        elif kind == "series":
+            sub = df[[p["x"], p["y"]]].dropna().sort_values(p["x"])
+            ax.plot(sub[p["x"]], sub[p["y"]])
+            xlabel, ylabel = p["x"], p["y"]
+        elif kind == "vbar":
+            cat = p["category"]
+            if p.get("response"):
+                agg = df.groupby(cat, dropna=False)[p["response"]].sum()
+                ylabel = p["response"]
+            else:
+                agg = df[cat].value_counts()
+                ylabel = "Count"
+            ax.bar([str(v) for v in agg.index], agg.values)
+            xlabel = cat
+        elif kind == "histogram":
+            var = p["var"]
+            ax.hist(df[var].dropna())
+            xlabel, ylabel = var, "Count"
+        else:
+            raise ValueError(f"unsupported PROC SGPLOT statement kind: {kind!r}")
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"PROC SGPLOT: saved {out_path}")
+    return out_path

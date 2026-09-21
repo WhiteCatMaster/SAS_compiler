@@ -128,6 +128,7 @@ class CodeGen:
         self.current_arrays: dict = {}
         self.hidden_vars: set = set()
         self.db_libs: dict = {}  # libref -> conn string, in program order
+        self.sgplot_counter = 0  # for default OUT= filenames (sgplot_1.png, ...)
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -692,6 +693,8 @@ class CodeGen:
             self._gen_proc_report(proc)
         elif name == "tabulate":
             self._gen_proc_tabulate(proc)
+        elif name == "sgplot":
+            self._gen_proc_sgplot(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -1258,6 +1261,48 @@ class CodeGen:
             out_name = normalize_dsname(out)
             self.w(f"_DS[{out_name!r}] = _piv.reset_index()")
             self.last_ds_name = out_name
+
+    # ---- PROC SGPLOT ----
+    _SGPLOT_KV_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)")
+    _SGPLOT_KINDS = ("scatter", "series", "vbar", "histogram")
+
+    def _parse_sgplot_stmt(self, ckw: str, raw: str) -> dict:
+        kv = {k.lower(): v.lower() for k, v in self._SGPLOT_KV_RE.findall(raw)}
+        if ckw in ("scatter", "series"):
+            if "x" not in kv or "y" not in kv:
+                raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires X= and Y=")
+            return {"kind": ckw, "x": kv["x"], "y": kv["y"]}
+        if ckw == "vbar":
+            body = raw.split("/", 1)[0]
+            m = re.search(r"vbar\s+([A-Za-z_]\w*)", body, re.I)
+            if not m:
+                raise CodegenError("PROC SGPLOT VBAR requires a category variable")
+            return {"kind": "vbar", "category": m.group(1).lower(), "response": kv.get("response")}
+        if ckw == "histogram":
+            m = re.search(r"histogram\s+([A-Za-z_]\w*)", raw, re.I)
+            if not m:
+                raise CodegenError("PROC SGPLOT HISTOGRAM requires a variable")
+            return {"kind": "histogram", "var": m.group(1).lower()}
+        raise CodegenError(f"unrecognized PROC SGPLOT statement: {ckw!r}")
+
+    def _gen_proc_sgplot(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        plots = [
+            self._parse_sgplot_stmt(ckw, raw)
+            for ckw, raw in proc.clauses
+            if ckw in self._SGPLOT_KINDS
+        ]
+        if not plots:
+            raise CodegenError(
+                "PROC SGPLOT requires at least one SCATTER/SERIES/VBAR/HISTOGRAM statement"
+            )
+        self.sgplot_counter += 1
+        out_path = proc.options.get("out")
+        if not isinstance(out_path, str):
+            out_path = f"sgplot_{self.sgplot_counter}.png"
+        title = proc.options.get("title") if isinstance(proc.options.get("title"), str) else None
+        self.w(f"_df = _DS[{dsname!r}]")
+        self.w(f"_r.proc_sgplot_render(_df, {plots!r}, {out_path!r}, title={title!r})")
 
     def _gen_proc_rank(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

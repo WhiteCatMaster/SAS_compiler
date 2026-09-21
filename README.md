@@ -96,11 +96,14 @@ printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
 — grouped-and-summarized when a `GROUP` and an `ANALYSIS` variable are
 both defined, else a plain listing of the `COLUMN` variables),
 `TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via
-`SUM`/`MEAN`/`N`, with an optional `OUT=`), and `SQL` — SQL statements
-are executed almost verbatim
-against duckdb with all current datasets registered as views, so most
-standard SQL (joins, GROUP BY/HAVING, window functions, CTEs) works
-without any special-casing here.
+`SUM`/`MEAN`/`N`, with an optional `OUT=`), `SGPLOT` (`SCATTER`,
+`SERIES`, `VBAR` with or without `RESPONSE=`, `HISTOGRAM` — multiple
+plot statements overlay onto one figure; saved to a PNG via
+`OUT="path.png"`, or a default `sgplot_N.png` if omitted, since there's
+no interactive display here), and `SQL` — SQL statements are executed
+almost verbatim against duckdb with all current datasets registered as
+views, so most standard SQL (joins, GROUP BY/HAVING, window functions,
+CTEs) works without any special-casing here.
 
 **Statistics / ML:** `CORR` (Pearson r and p-value matrix, plus an
 optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
