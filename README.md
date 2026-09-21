@@ -187,13 +187,22 @@ built-in format families are `COMMAw.d`, `DOLLARw.d`, `PERCENTw.d`,
 (`value $gender "M"="Male" ... other="Unknown";`) — referenced the same
 way via `FORMAT var fmtname.` or `PUT(var, fmtname.)`.
 
-**ODS:** `ODS HTML FILE="report.html"; ... ODS HTML CLOSE;` redirects
-everything any PROC step would otherwise print (between the two
-statements) into an HTML report file instead of the console — this
-works for every PROC automatically, via stdout redirection, not by
-special-casing each one. Other ODS destinations/statements (`LISTING`,
-`PDF`, `RTF`, `SELECT`/`EXCLUDE`, `_ALL_`, ...) are parsed and safely
-ignored rather than raising an error.
+**ODS:** `ODS HTML FILE="report.html"; ... ODS HTML CLOSE;` and
+`ODS RTF FILE="report.rtf"; ... ODS RTF CLOSE;` redirect everything any
+PROC step would otherwise print (between the open/close pair) into a
+report file instead of the console — this works for every PROC
+automatically, via stdout redirection, not by special-casing each one.
+HTML and RTF each track their own open/closed state independently, so
+both can be open at once (each capturing the same printed output into
+its own file); closing one leaves the other open. HTML output detects
+blocks of `to_string()`-style whitespace-aligned tabular text and
+renders them as real `<table>`/`<tr>`/`<td>` markup with light CSS
+borders/padding, falling back to a plain `<pre>` block for narrow
+output or anything that doesn't parse as a table; RTF output is a
+minimal valid `{\rtf1 ...}` document with the captured text as
+monospace paragraphs. Other ODS destinations/statements (`LISTING`,
+`PDF`, `SELECT`/`EXCLUDE`, `_ALL_`, ...) are parsed and safely ignored
+rather than raising an error.
 
 ## Known limitations
 
@@ -244,12 +253,14 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   libraries have their referenced `libref.table`s staged as views).
 - Formats affect display (`PROC PRINT`, `PUT()`) but not the underlying
   stored value.
-- **ODS HTML** renders everything captured as one plain monospace `<pre>`
-  block (a faithful re-rendering of exactly what would have printed to
-  the console), not real per-PROC `<table>` markup or CSS styling; only
-  one destination can be open at a time (opening a second while the
-  first is still open closes and writes the first automatically rather
-  than erroring or interleaving).
+- **ODS** table detection is heuristic (whitespace-aligned columns with
+  a consistent field count across the first couple of lines); output
+  that doesn't match that shape renders as `<pre>` narrative text
+  instead of a `<table>` even if a human would call it tabular. RTF
+  output is plain monospace paragraphs, not real RTF tables. Re-opening
+  the *same* destination while it's already open closes and writes the
+  previous one first rather than erroring or interleaving (HTML and RTF
+  are independent destinations and can be open at the same time).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/

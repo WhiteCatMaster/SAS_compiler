@@ -1849,13 +1849,13 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
     return pd.DataFrame(diffs)
 
 
-# ---------------- ODS HTML ----------------
+# ---------------- ODS (HTML / RTF) ----------------
 class _OdsHtmlCapture:
-    """A stdout-like buffer used while ODS HTML is open. Everything the
-    generated code prints (PROC output, PUT, ...) is collected here and
-    wrapped into one HTML document on close -- a single monospace <pre>
-    block, not reconstructed per-PROC <table> markup, so rendering is
-    always correct even though it isn't styled like real ODS HTML."""
+    """A stdout-like per-destination buffer used while an ODS destination
+    is open. Everything the generated code prints (PROC output, PUT, ...)
+    while that destination is open is collected here. (Despite the name,
+    kept for backward compatibility, this generic buffer backs every ODS
+    destination -- not just HTML.)"""
 
     def __init__(self):
         self.buffer = []
@@ -1868,38 +1868,192 @@ class _OdsHtmlCapture:
         pass
 
 
+class _OdsBroadcast:
+    """What sys.stdout actually points to while >=1 ODS destination is
+    open: fans every write out to each currently-open destination's own
+    buffer, so e.g. HTML and RTF can be open at the same time and each
+    independently captures everything printed while IT is open."""
+
+    def write(self, text):
+        for state in (_ODS_HTML_STATE, _ODS_RTF_STATE):
+            if state["active"]:
+                state["capture"].write(text)
+        return len(text)
+
+    def flush(self):
+        pass
+
+
+_ODS_BROADCAST = _OdsBroadcast()
+_ODS_SAVED_STDOUT = {"value": None}
+
 _ODS_HTML_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
+_ODS_RTF_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
+
+
+def _ods_redirect_if_needed():
+    if _ODS_SAVED_STDOUT["value"] is None:
+        _ODS_SAVED_STDOUT["value"] = sys.stdout
+        sys.stdout = _ODS_BROADCAST
+
+
+def _ods_restore_if_idle():
+    if not _ODS_HTML_STATE["active"] and not _ODS_RTF_STATE["active"]:
+        if _ODS_SAVED_STDOUT["value"] is not None:
+            sys.stdout = _ODS_SAVED_STDOUT["value"]
+            _ODS_SAVED_STDOUT["value"] = None
+
+
+_ODS_MIN_TABLE_COLS = 3  # narrower blocks (e.g. a single-VAR PROC PRINT)
+# stay <pre> rather than risk mangling narrow narrative text into a table
+
+
+def _ods_split_chunks(text: str) -> list:
+    return re.split(r"\n\s*\n", text)
+
+
+def _ods_try_parse_table(chunk: str):
+    """Return (header, [data_rows]) if `chunk` looks like a monospace
+    -aligned table (every non-blank line splits into the same nonzero
+    field count on runs of 2+ spaces, with at least MIN_TABLE_COLS
+    columns and at least one data row), else None."""
+    lines = [ln for ln in chunk.split("\n") if ln.strip() != ""]
+    if len(lines) < 2:
+        return None
+
+    def split_fields(ln):
+        return [f for f in re.split(r"\s{2,}", ln.strip()) if f != ""]
+
+    header = split_fields(lines[0])
+    data_start = 1
+    # pandas prints a DataFrame's named index (e.g. PROC PRINT's "Obs")
+    # on its own line right after the header rather than folding it into
+    # the header line; fold it back in as the header's first column.
+    if len(lines) >= 3:
+        second = split_fields(lines[1])
+        if len(second) == 1 and len(split_fields(lines[2])) == len(header) + 1:
+            header = second + header
+            data_start = 2
+
+    data_lines = lines[data_start:]
+    if not data_lines:
+        return None
+    rows = [split_fields(ln) for ln in data_lines]
+    ncols = len(header)
+    if ncols < _ODS_MIN_TABLE_COLS:
+        return None
+    if any(len(r) != ncols for r in rows):
+        return None
+    return header, rows
+
+
+def _ods_html_document(text: str) -> str:
+    parts = []
+    for chunk in _ods_split_chunks(text):
+        if chunk.strip() == "":
+            continue
+        table = _ods_try_parse_table(chunk)
+        if table:
+            header, body_rows = table
+            trs = ["<tr>" + "".join(f"<th>{_html.escape(c)}</th>" for c in header) + "</tr>"]
+            for r in body_rows:
+                trs.append("<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in r) + "</tr>")
+            parts.append("<table>\n" + "\n".join(trs) + "\n</table>")
+        else:
+            parts.append(f"<pre>{_html.escape(chunk)}</pre>")
+    body_html = "\n".join(parts)
+    style = (
+        "body{font-family:monospace;font-size:14px;}"
+        "table{border-collapse:collapse;margin:1em 0;}"
+        "th,td{border:1px solid #888;padding:4px 10px;text-align:right;}"
+        "th{background:#e8e8e8;}"
+        "pre{white-space:pre-wrap;}"
+    )
+    return (
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">"
+        f"<title>SAS Output</title><style>{style}</style></head>\n"
+        f"<body>\n{body_html}\n</body></html>\n"
+    )
+
+
+def _ods_rtf_escape(text: str) -> str:
+    text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+    return "\\par\n".join(text.split("\n"))
+
+
+def _ods_rtf_document(text: str) -> str:
+    body = _ods_rtf_escape(text)
+    return (
+        "{\\rtf1\\ansi\\deff0\n"
+        "{\\fonttbl{\\f0\\fmodern Courier New;}}\n"
+        "\\f0\\fs20\n"
+        f"{body}\n"
+        "}\n"
+    )
+
+
+def ods_proc_boundary():
+    """Called once after every PROC step's own output. Inserts a blank
+    line, but only while an ODS destination is actually capturing --
+    this is how the HTML/RTF renderer tells where one PROC's report
+    ends and the next begins (they'd otherwise run together with no
+    separator, since PROC steps don't print a trailing blank line on
+    their own). A complete no-op otherwise, so it never changes
+    ordinary (non-ODS) program output."""
+    if _ODS_HTML_STATE["active"] or _ODS_RTF_STATE["active"]:
+        print()
 
 
 def ods_html_open(path):
     """ODS HTML FILE="path"; -- start capturing everything printed until
     ods_html_close(). Re-opening while already open closes (and writes)
-    the previous destination first, rather than losing it silently."""
+    the previous destination first, rather than losing it silently.
+    HTML and RTF may be open at the same time; each captures
+    independently starting from when it was opened."""
     if _ODS_HTML_STATE["active"]:
         ods_html_close()
-    real_stdout = sys.stdout
+    _ods_redirect_if_needed()
     capture = _OdsHtmlCapture()
-    sys.stdout = capture
-    _ODS_HTML_STATE.update(active=True, path=path, capture=capture, real_stdout=real_stdout)
+    _ODS_HTML_STATE.update(active=True, path=path, capture=capture, real_stdout=_ODS_SAVED_STDOUT["value"])
 
 
 def ods_html_close():
-    """ODS HTML CLOSE; -- restore stdout and write the accumulated output
-    to the destination file. A no-op if nothing is currently open."""
+    """ODS HTML CLOSE; -- stop capturing for HTML and write the
+    accumulated output to the destination file. A no-op if HTML isn't
+    currently open. Real stdout is only restored once no other ODS
+    destination (e.g. RTF) is still open."""
     if not _ODS_HTML_STATE["active"]:
         return
     capture = _ODS_HTML_STATE["capture"]
     path = _ODS_HTML_STATE["path"]
-    sys.stdout = _ODS_HTML_STATE["real_stdout"]
     _ODS_HTML_STATE.update(active=False, path=None, capture=None, real_stdout=None)
+    _ods_restore_if_idle()
 
-    body = _html.escape("".join(capture.buffer))
-    doc = (
-        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">"
-        "<title>SAS Output</title></head>\n"
-        '<body><pre style="font-family: monospace; white-space: pre-wrap;">'
-        f"{body}</pre></body></html>\n"
-    )
+    doc = _ods_html_document("".join(capture.buffer))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(doc)
+
+
+def ods_rtf_open(path):
+    """ODS RTF FILE="path"; -- same semantics as ods_html_open() but for
+    the RTF destination; HTML and RTF may both be open at once."""
+    if _ODS_RTF_STATE["active"]:
+        ods_rtf_close()
+    _ods_redirect_if_needed()
+    capture = _OdsHtmlCapture()
+    _ODS_RTF_STATE.update(active=True, path=path, capture=capture, real_stdout=_ODS_SAVED_STDOUT["value"])
+
+
+def ods_rtf_close():
+    """ODS RTF CLOSE; -- see ods_html_close()."""
+    if not _ODS_RTF_STATE["active"]:
+        return
+    capture = _ODS_RTF_STATE["capture"]
+    path = _ODS_RTF_STATE["path"]
+    _ODS_RTF_STATE.update(active=False, path=None, capture=None, real_stdout=None)
+    _ods_restore_if_idle()
+
+    doc = _ods_rtf_document("".join(capture.buffer))
     with open(path, "w", encoding="utf-8") as f:
         f.write(doc)
 
@@ -1916,4 +2070,14 @@ def _ods_html_atexit_restore():
             pass
 
 
+def _ods_rtf_atexit_restore():
+    """Safety net: see _ods_html_atexit_restore(), for RTF."""
+    if _ODS_RTF_STATE["active"]:
+        try:
+            ods_rtf_close()
+        except Exception:
+            pass
+
+
 atexit.register(_ods_html_atexit_restore)
+atexit.register(_ods_rtf_atexit_restore)

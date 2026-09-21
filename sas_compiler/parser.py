@@ -226,16 +226,16 @@ class Parser:
                 self.advance()
         self.skip_to_semi()
 
-        if dest != "html":
-            # only HTML is implemented; every other ODS destination/form
-            # (LISTING, PDF, RTF, _ALL_, SELECT/EXCLUDE, ...) is safely
-            # ignored rather than raising a parse error.
+        if dest not in ("html", "rtf"):
+            # only HTML and RTF are implemented; every other ODS
+            # destination/form (LISTING, PDF, _ALL_, SELECT/EXCLUDE, ...)
+            # is safely ignored rather than raising a parse error.
             return None
         if is_close:
-            return A.OdsStmt(action="close", destination="html")
+            return A.OdsStmt(action="close", destination=dest)
         if path is not None:
-            return A.OdsStmt(action="open", destination="html", path=path)
-        return None  # bare "ods html;" with no FILE=: no-op
+            return A.OdsStmt(action="open", destination=dest, path=path)
+        return None  # bare "ods html;"/"ods rtf;" with no FILE=: no-op
 
     def parse_libname(self) -> A.LibnameStmt:
         self.advance()  # 'libname'
