@@ -1835,13 +1835,18 @@ class CodeGen:
         compare_expr, _ = self._src_for_option(proc, "compare")
         id_clause = self._clause(proc, "id")
         var_clause = self._clause(proc, "var")
+        by_clause = self._clause(proc, "by")
         id_vars = [n for n, _ in id_clause] if id_clause else None
         var_list = [n for n, _ in var_clause] if var_clause else None
+        by_vars = [n for n, _ in by_clause] if by_clause else None
+        criterion_raw = proc.options.get("criterion")
+        criterion = float(criterion_raw) if criterion_raw is not None else 0.0
         self.w(f"_base = {base_expr}")
         self.w(f"_compare = {compare_expr}")
         self.w(
             f"_cmp_diffs = _r.proc_compare_report(_base, _compare, "
-            f"id_vars={id_vars!r}, var_list={var_list!r})"
+            f"id_vars={id_vars!r}, var_list={var_list!r}, "
+            f"by_vars={by_vars!r}, criterion={criterion!r})"
         )
         out_raw = proc.options.get("out")
         if isinstance(out_raw, str):
