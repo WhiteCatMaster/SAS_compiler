@@ -401,6 +401,61 @@ def test_do_over():
     assert not any(c.startswith("__ovidx") for c in ds["out"].columns)
 
 
+def test_array_explicit_bounds():
+    src = """
+    data out;
+      array yr{2020:2023} y2020-y2023 (10, 20, 30, 40);
+      do year = 2020 to 2023;
+        total + yr{year};
+      end;
+      lo = lbound(yr);
+      hi = hbound(yr);
+      n = dim(yr);
+      drop year;
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["out"].iloc[0]
+    assert row["total"] == 100.0
+    assert row["lo"] == 2020.0
+    assert row["hi"] == 2023.0
+    assert row["n"] == 4.0
+
+
+def test_proc_format_value_lists(capsys):
+    src = """
+    proc format;
+      value agegrp
+        low-17 = "Minor"
+        18-64 = "Adult"
+        65-high = "Senior";
+      value $gender
+        "M" = "Male"
+        "F" = "Female"
+        other = "Unknown";
+    run;
+    data people;
+      input name $ age gender $;
+      format age agegrp. gender $gender.;
+      datalines;
+    Alice 15 F
+    Bob 30 M
+    Carol 70 X
+    ;
+    run;
+    proc print data=people;
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["people"]["age"].tolist() == [15.0, 30.0, 70.0]  # underlying value unchanged
+    captured = capsys.readouterr().out
+    assert "Minor" in captured
+    assert "Adult" in captured
+    assert "Senior" in captured
+    assert "Female" in captured
+    assert "Unknown" in captured
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

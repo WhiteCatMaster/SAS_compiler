@@ -18,6 +18,29 @@ SAS_EPOCH = date(1960, 1, 1)
 
 MACRO_VARS: dict = {}
 
+# PROC FORMAT value lists, keyed by format name (character formats keyed
+# with their leading '$', matching how FORMAT statements reference them).
+USER_FORMATS: dict = {}
+
+
+def _lookup_user_format(fmt_name: str, value):
+    entry = USER_FORMATS.get(fmt_name.lower())
+    if entry is None:
+        return None
+    if "values" in entry:
+        v = sas_text(value)
+        if v in entry["values"]:
+            return entry["values"][v]
+        return entry.get("other")
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return entry.get("other")
+    for lo, hi, label in entry["ranges"]:
+        if lo <= v <= hi:
+            return label
+    return entry.get("other")
+
 
 class _RowDelete(Exception):
     pass
@@ -417,6 +440,9 @@ def apply_format(value, fmt: str) -> str:
     if fmt is None:
         return sas_str(value)
     fmt = fmt.strip()
+    user_result = _lookup_user_format(fmt.rstrip("."), value)
+    if user_result is not None:
+        return user_result
     if "." not in fmt:
         fmt += "."
     m = _FMT_RE.match(fmt)

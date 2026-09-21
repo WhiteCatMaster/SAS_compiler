@@ -60,7 +60,8 @@ text functions `%UPCASE`/`%LOWCASE`/`%SUBSTR`/`%SCAN`/`%INDEX`/`%LENGTH`/
 `first.`/`last.` group processing), dataset options (`DROP=`, `KEEP=`,
 `RENAME=`, `WHERE=`, `IN=`), `ARRAY` (including `array x{n} (v1, v2, ...)`
 initializer lists, numeric or character, with or without explicit element
-names) plus `DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`, `RETAIN`, the sum statement
+names, and explicit bounds via `array x{2020:2023}`) plus
+`DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`, `RETAIN`, the sum statement
 (`var + expr;`), `DO`/`DO WHILE`/`DO UNTIL`/iterative `DO`, `IF`/`THEN`/
 `ELSE` and subsetting `IF`, `OUTPUT` (single or multiple output datasets),
 `DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
@@ -69,19 +70,22 @@ library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
 `SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
-`OUTPUT OUT=`), `FREQ` (one-way and two-way `TABLES`), `APPEND`, and
-`SQL` — SQL statements are executed almost verbatim against duckdb with
-all current datasets registered as views, so most standard SQL (joins,
-GROUP BY/HAVING, window functions, CTEs) works without any
-special-casing here.
+`OUTPUT OUT=`), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
+`FORMAT` (see below), and `SQL` — SQL statements are executed almost
+verbatim against duckdb with all current datasets registered as views,
+so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)
+works without any special-casing here.
 
 **Formats:** a `FORMAT` statement's assignments are tracked per dataset
 (and propagate through `PROC SORT`), and `PROC PRINT` renders formatted
 columns accordingly; `PUT(value, format.)` applies a format inline. The
-supported format families are `COMMAw.d`, `DOLLARw.d`, `PERCENTw.d`,
+built-in format families are `COMMAw.d`, `DOLLARw.d`, `PERCENTw.d`,
 `Zw.d`, `BESTw.d`, `$w.`/`$CHARw.`, and the date formats `DATE9.`,
-`MMDDYYw.`, `YYMMDDw.`, `DDMMYYw.`, `WORDDATE.` — not the full SAS
-format catalog (no user-defined `PROC FORMAT` value lists yet).
+`MMDDYYw.`, `YYMMDDw.`, `DDMMYYw.`, `WORDDATE.`. On top of those,
+`PROC FORMAT` user-defined value lists are supported — numeric ranges
+(`low-17`, `65-high`, `OTHER`) and character value maps
+(`value $gender "M"="Male" ... other="Unknown";`) — referenced the same
+way via `FORMAT var fmtname.` or `PUT(var, fmtname.)`.
 
 ## Known limitations
 
@@ -106,8 +110,6 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - Formats affect display (`PROC PRINT`, `PUT()`) but not the underlying
   stored value, and there's no `PROC FORMAT` for user-defined value
   lists — only the built-in format families listed above.
-- Arrays are always 1-based (`array x{lo:hi}` explicit-bounds syntax is
-  parsed but the lower bound is ignored).
 - PROC steps beyond `PRINT`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/`SQL`
   raise a clear `NotImplementedError` naming the missing PROC, rather
   than silently doing nothing.

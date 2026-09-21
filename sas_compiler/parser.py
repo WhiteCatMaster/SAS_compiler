@@ -268,13 +268,32 @@ class Parser:
         self.advance()
         name = self.advance().value.lower()
         dim = None
+        lo_bound = 1
         if self.peek().type == TokType.OP and self.peek().value in ("{", "["):
             self.advance()
-            if self.peek().type == TokType.NUMBER:
-                dim = int(float(self.advance().value))
-            elif self.peek().type == TokType.OP and self.peek().value == "*":
+
+            def _read_signed_int():
+                sign = -1 if self.peek().type == TokType.OP and self.peek().value == "-" else 1
+                if sign == -1:
+                    self.advance()
+                if self.peek().type == TokType.NUMBER:
+                    return sign * int(float(self.advance().value))
+                return None
+
+            if self.peek().type == TokType.OP and self.peek().value == "*":
                 self.advance()
                 dim = None
+            else:
+                n1 = _read_signed_int()
+                if n1 is not None:
+                    if self.peek().type == TokType.OP and self.peek().value == ":":
+                        self.advance()
+                        n2 = _read_signed_int()
+                        if n2 is not None:
+                            lo_bound = n1
+                            dim = n2 - n1 + 1
+                    else:
+                        dim = n1
             while not (self.peek().type == TokType.OP and self.peek().value in ("}", "]")) and self.peek().type != TokType.EOF:
                 self.advance()
             if self.peek().type == TokType.OP and self.peek().value in ("}", "]"):
@@ -316,7 +335,7 @@ class Parser:
 
         self.skip_to_semi()
         return A.ArrayStmt(name=name, dim=dim, elements=elements, is_char=is_char,
-                            length=length, init_values=init_values)
+                            length=length, init_values=init_values, lo_bound=lo_bound)
 
     def _parse_array_init_values(self) -> list:
         self.advance()  # '('
@@ -824,6 +843,8 @@ class Parser:
 
         if name == "sql":
             return self._parse_proc_sql(options)
+        if name == "format":
+            return self._parse_proc_format(options)
 
         clauses = []
         while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
@@ -901,6 +922,69 @@ class Parser:
                 self.advance()
         self.skip_to_semi()
         return info
+
+    def _parse_format_bound(self):
+        neg = False
+        if self.peek().type == TokType.OP and self.peek().value == "-":
+            neg = True
+            self.advance()
+        if self.is_kw("low"):
+            self.advance()
+            return float("-inf")
+        if self.is_kw("high"):
+            self.advance()
+            return float("inf")
+        if self.peek().type == TokType.NUMBER:
+            v = float(self.advance().value)
+            return -v if neg else v
+        return 0.0
+
+    def _parse_proc_format(self, options) -> A.ProcStep:
+        clauses = []
+        while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
+            if not self.is_kw("value"):
+                self.skip_to_semi()
+                continue
+            self.advance()
+            is_char = False
+            if self.peek().type == TokType.OP and self.peek().value == "$":
+                is_char = True
+                self.advance()
+            fmtname = self.advance().value.lower()
+            entries = []
+            other_label = None
+            while self.peek().type not in (TokType.SEMI, TokType.EOF):
+                if self.is_kw("other"):
+                    self.advance()
+                    if self.peek().type == TokType.OP and self.peek().value == "=":
+                        self.advance()
+                    other_label = self.advance().value if self.peek().type == TokType.STRING else ""
+                    continue
+                if is_char:
+                    if self.peek().type == TokType.STRING:
+                        val = self.advance().value
+                        if self.peek().type == TokType.OP and self.peek().value == "=":
+                            self.advance()
+                        label = self.advance().value if self.peek().type == TokType.STRING else ""
+                        entries.append((val, label))
+                    else:
+                        self.advance()
+                else:
+                    lo = self._parse_format_bound()
+                    hi = lo
+                    if self.peek().type == TokType.OP and self.peek().value == "-":
+                        self.advance()
+                        hi = self._parse_format_bound()
+                    if self.peek().type == TokType.OP and self.peek().value == "=":
+                        self.advance()
+                    label = self.advance().value if self.peek().type == TokType.STRING else ""
+                    entries.append((lo, hi, label))
+            self.skip_to_semi()
+            clauses.append(("value", is_char, fmtname, entries, other_label))
+        if self.is_kw("run") or self.is_kw("quit"):
+            self.advance()
+            self.skip_to_semi()
+        return A.ProcStep(name="format", options=options, clauses=clauses)
 
     def _parse_proc_sql(self, options) -> A.ProcStep:
         start = self.peek().pos

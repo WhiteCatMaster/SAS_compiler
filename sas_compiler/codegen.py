@@ -114,6 +114,10 @@ class CodeGen:
         self.tmp += 1
         return f"_{prefix}{self.tmp}"
 
+    def _arr_lo(self, name: str) -> int:
+        arrstmt = self.current_arrays.get(name)
+        return arrstmt.lo_bound if arrstmt is not None else 1
+
     def generate(self, prog: A.Program) -> str:
         self.w("import sas_compiler.runtime as _r")
         self.w("import pandas as pd")
@@ -146,7 +150,8 @@ class CodeGen:
             return f"{varmap}.get({e.kind + '_' + e.var!r}, False)"
         if isinstance(e, A.ArrayRef):
             idx = self.gen_expr(e.index, varmap)
-            return f"{varmap}.get(_ARR_{e.name}[int({idx}) - 1], _r.MISSING)"
+            lo = self._arr_lo(e.name)
+            return f"{varmap}.get(_ARR_{e.name}[int({idx}) - {lo}], _r.MISSING)"
         if isinstance(e, A.UnaryOp):
             operand = self.gen_expr(e.operand, varmap)
             if e.op == "not":
@@ -202,7 +207,9 @@ class CodeGen:
             arrstmt = self.current_arrays.get(e.args[0].name)
             if arrstmt is not None:
                 if name == "lbound":
-                    return "1.0"
+                    return repr(float(arrstmt.lo_bound))
+                if name == "hbound":
+                    return repr(float(arrstmt.lo_bound + arrstmt.dim - 1))
                 return repr(float(arrstmt.dim))
         args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
         if name in _FUNC_MAP:
@@ -255,7 +262,8 @@ class CodeGen:
             self.w(f"pdv[{s.target.name!r}] = {expr_code}")
         elif isinstance(s.target, A.ArrayRef):
             idx = self.gen_expr(s.target.index)
-            self.w(f"pdv[_ARR_{s.target.name}[int({idx}) - 1]] = {expr_code}")
+            lo = self._arr_lo(s.target.name)
+            self.w(f"pdv[_ARR_{s.target.name}[int({idx}) - {lo}]] = {expr_code}")
         else:
             raise CodegenError(f"invalid assignment target {s.target!r}")
 
@@ -292,7 +300,9 @@ class CodeGen:
             self.w(f"while {v} < {arrstmt.dim}:")
             self.indent += 1
             self.w(f"{v} = {v} + 1")
-            self.w(f"pdv[{idxkey!r}] = float({v})")
+            # translate the 1..dim loop counter into the array's actual SAS
+            # subscript value, since ArrayRef codegen subtracts lo_bound
+            self.w(f"pdv[{idxkey!r}] = float({v} + {arrstmt.lo_bound - 1})")
             for st in s.body:
                 self.gen_stmt(_rewrite_stmt(st, arrname, idxkey))
             self.indent -= 1
@@ -358,7 +368,8 @@ class CodeGen:
                 self.w(f"pdv[{target.name!r}] = _r.nomiss_sum(pdv.get({target.name!r}, 0.0), {expr_code})")
             elif isinstance(target, A.ArrayRef):
                 idx = self.gen_expr(target.index)
-                self.w(f"_k = _ARR_{target.name}[int({idx}) - 1]")
+                lo = self._arr_lo(target.name)
+                self.w(f"_k = _ARR_{target.name}[int({idx}) - {lo}]")
                 self.w(f"pdv[_k] = _r.nomiss_sum(pdv.get(_k, 0.0), {expr_code})")
             return
         if name == "symput":
@@ -598,6 +609,8 @@ class CodeGen:
             self._gen_proc_freq(proc)
         elif name == "append":
             self._gen_proc_append(proc)
+        elif name == "format":
+            self._gen_proc_format(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -615,6 +628,26 @@ class CodeGen:
             if k == key:
                 return v
         return None
+
+    @staticmethod
+    def _num_lit(v: float) -> str:
+        if v == float("inf"):
+            return "float('inf')"
+        if v == float("-inf"):
+            return "float('-inf')"
+        return repr(float(v))
+
+    def _gen_proc_format(self, proc: A.ProcStep):
+        for (_, is_char, fmtname, entries, other_label) in proc.clauses:
+            key = ("$" if is_char else "") + fmtname
+            if is_char:
+                pairs = ", ".join(f"{v!r}: {lbl!r}" for v, lbl in entries)
+                self.w(f"_r.USER_FORMATS[{key!r}] = {{'values': {{{pairs}}}, 'other': {other_label!r}}}")
+            else:
+                ranges = ", ".join(
+                    f"({self._num_lit(lo)}, {self._num_lit(hi)}, {lbl!r})" for lo, hi, lbl in entries
+                )
+                self.w(f"_r.USER_FORMATS[{key!r}] = {{'ranges': [{ranges}], 'other': {other_label!r}}}")
 
     def _gen_proc_sql(self, proc: A.ProcStep):
         self.w("_con = duckdb.connect()")
