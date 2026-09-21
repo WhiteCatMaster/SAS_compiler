@@ -281,6 +281,13 @@ class DeclareHiterStmt(Stmt):
 
 
 @dataclass
+class FcmpReturnStmt(Stmt):
+    """RETURN(expr); inside a PROC FCMP function body (distinct from the
+    DATA step's bare RETURN;, which just jumps to the end of the step)."""
+    expr: Expr
+
+
+@dataclass
 class TitleStmt(Stmt):
     """TITLE/FOOTNOTE statement: printed atop/below PROC PRINT output."""
     text: str

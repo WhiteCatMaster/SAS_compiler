@@ -133,7 +133,10 @@ statements — rows aligned by `ID` value or, without one, by position;
 prints a per-variable mismatch summary and a capped differences table,
 plus a `NOTE: No unequal values were found` message when the datasets
 truly match; an optional `OUT=` gets the differences as a long-form
-`_id_`/`_var_`/`_base_`/`_compare_` dataset), and `SQL` — SQL statements are executed
+`_id_`/`_var_`/`_base_`/`_compare_` dataset), `FCMP` (user-defined
+functions — `FUNCTION name(args) [$]; ... RETURN(expr); ENDSUB;` —
+callable from any later DATA step by name, using the same statement
+grammar as the DATA step itself), and `SQL` — SQL statements are executed
 almost verbatim against duckdb with all current datasets registered as
 views, so most standard SQL (joins, GROUP BY/HAVING, window functions,
 CTEs) works without any special-casing here. A `WHERE` statement and the
@@ -249,14 +252,22 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   than erroring or interleaving).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`SQL`
-  raise a clear `NotImplementedError` naming the missing PROC, rather than
-  silently doing nothing.
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
+  `SQL` raise a clear `NotImplementedError` naming the missing PROC, rather
+  than silently doing nothing.
 - **PROC COMPARE** does exact-equality comparison only (no `CRITERION=`
   fuzzy tolerance, no `TRANSFORM=`), has no `BY` support (compares the
   whole BASE/COMPARE datasets as given), and its `ID` alignment takes the
   first row per key value when a key repeats rather than matching
   multiple occurrences pairwise.
+- **PROC FCMP** functions support scalar numeric/character parameters,
+  assignment, `IF`/`THEN`/`ELSE`, and `RETURN(expr)` in their bodies (the
+  same DATA-step statement grammar, minus anything dataset-shaped like
+  `SET`/arrays-as-parameters); there's no `OUTLIB=`-backed persistent
+  package dataset (a defined function is simply callable from any later
+  step in the same compiled program, `OPTIONS CMPLIB=` is accepted but
+  not required), no `ARRAY` parameters, and no `PROC PROTO`/external
+  C-function calls.
 
 ## Tests
 

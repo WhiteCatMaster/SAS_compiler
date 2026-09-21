@@ -152,6 +152,8 @@ class CodeGen:
         self.loop_stack: list = []
         self._put_target: str | None = None  # file handle var for PUT, else stdout
         self._put_sep: str = " "
+        self.fcmp_functions: set = set()  # PROC FCMP function names, callable by name
+        self.fcmp_char_functions: set = set()  # ...and which of those return character
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -178,6 +180,11 @@ class CodeGen:
         for step in prog.steps:
             if isinstance(step, A.DataStep):
                 fnames.append(self.gen_data_step(step))
+            elif isinstance(step, A.ProcStep) and step.name.lower() == "fcmp":
+                # Function defs, not a runnable step: emitted directly at
+                # module level (not wrapped in a _step_N() to call later)
+                # so later DATA steps can call them by name.
+                self.gen_proc_fcmp(step)
             elif isinstance(step, A.ProcStep):
                 fnames.append(self.gen_proc_step(step))
             elif isinstance(step, A.LibnameStmt):
@@ -302,6 +309,8 @@ class CodeGen:
                     return repr(float(arrstmt.lo_bound + arrstmt.dim - 1))
                 return repr(float(arrstmt.dim))
         args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
+        if name in self.fcmp_functions:
+            return f"_fcmp_{name}({args_code})"
         if name in _FUNC_MAP:
             return f"_r.{_FUNC_MAP[name]}({args_code})"
         if name in _DIRECT_FUNCS:
@@ -313,7 +322,7 @@ class CodeGen:
             return True
         if isinstance(e, A.BinOp) and e.op == "||":
             return True
-        if isinstance(e, A.Call) and e.name.lower() in CHAR_FUNCS:
+        if isinstance(e, A.Call) and (e.name.lower() in CHAR_FUNCS or e.name.lower() in self.fcmp_char_functions):
             return True
         return False
 
@@ -336,6 +345,9 @@ class CodeGen:
         elif isinstance(s, A.DeleteStmt):
             self.w("raise _r._RowDelete()")
         elif isinstance(s, A.ReturnStmt):
+            self.w("raise _r._RowReturn()")
+        elif isinstance(s, A.FcmpReturnStmt):
+            self.w(f"pdv['__ret__'] = {self.gen_expr(s.expr)}")
             self.w("raise _r._RowReturn()")
         elif isinstance(s, A.StopStmt):
             self.w("raise _r._DataStop()")
@@ -973,6 +985,57 @@ class CodeGen:
         return rows
 
     # ---------------- PROC steps ----------------
+    def gen_proc_fcmp(self, proc: A.ProcStep):
+        """Emit one plain Python `def` per PROC FCMP FUNCTION, directly at
+        module level (not wrapped in a callable _step_N()), and register
+        each name so _gen_call() routes calls to it. Each function body
+        reuses the ordinary DATA-step statement codegen (gen_stmt) by
+        giving it a local dict literally named `pdv` -- every existing
+        statement (IF/DO/SELECT/assignment/...) already targets that name,
+        so nothing there needs to change for this to work. RETURN(expr)
+        (FcmpReturnStmt) stores the result at pdv['__ret__'] and raises the
+        same _RowReturn used by the ordinary DATA step RETURN, caught right
+        here instead of by a row loop."""
+        for clause in proc.clauses:
+            if clause[0] != "function":
+                continue
+            _, fname, params, is_char, body = clause
+            if not fname:
+                continue
+            self.fcmp_functions.add(fname)
+            if is_char:
+                self.fcmp_char_functions.add(fname)
+            char_locals: set = set()
+            for st in body:
+                if isinstance(st, A.LengthStmt):
+                    for (n, ischar, _length) in st.entries:
+                        if ischar:
+                            char_locals.add(n)
+
+            self.w(f"def _fcmp_{fname}({', '.join(params)}):")
+            self.indent += 1
+            self.w("pdv = {}")
+            for n in sorted(char_locals):
+                self.w(f"pdv[{n!r}] = ''")
+            for p in params:
+                self.w(f"pdv[{p!r}] = {p}")
+            self.w("try:")
+            self.indent += 1
+            if body:
+                for st in body:
+                    self.gen_stmt(st)
+            else:
+                self.w("pass")
+            self.indent -= 1
+            self.w("except _r._RowReturn:")
+            self.indent += 1
+            self.w("pass")
+            self.indent -= 1
+            default = "''" if is_char else "_r.MISSING"
+            self.w(f"return pdv.get('__ret__', {default})")
+            self.indent -= 1
+        self.w("")
+
     def gen_proc_step(self, proc: A.ProcStep) -> str:
         self.step_idx += 1
         fname = f"_step_{self.step_idx}"
