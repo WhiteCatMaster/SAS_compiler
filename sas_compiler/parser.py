@@ -578,6 +578,7 @@ class Parser:
         name = self.advance().value.lower()
         dim = None
         lo_bound = 1
+        dims = None
         if self.peek().type == TokType.OP and self.peek().value in ("{", "["):
             self.advance()
 
@@ -589,20 +590,34 @@ class Parser:
                     return sign * int(float(self.advance().value))
                 return None
 
+            dims_list = []
             if self.peek().type == TokType.OP and self.peek().value == "*":
                 self.advance()
                 dim = None
             else:
-                n1 = _read_signed_int()
-                if n1 is not None:
+                while True:
+                    n1 = _read_signed_int()
+                    if n1 is None:
+                        break
+                    this_lo, this_dim = 1, n1
                     if self.peek().type == TokType.OP and self.peek().value == ":":
                         self.advance()
                         n2 = _read_signed_int()
                         if n2 is not None:
-                            lo_bound = n1
-                            dim = n2 - n1 + 1
-                    else:
-                        dim = n1
+                            this_lo, this_dim = n1, n2 - n1 + 1
+                    dims_list.append((this_dim, this_lo))
+                    if self.peek().type == TokType.COMMA:
+                        self.advance()
+                        continue
+                    break
+                if len(dims_list) >= 2:
+                    dims = dims_list
+                    dim = 1
+                    for (sz, _lo) in dims_list:
+                        dim *= sz
+                    lo_bound = 1
+                elif len(dims_list) == 1:
+                    dim, lo_bound = dims_list[0]
             while not (self.peek().type == TokType.OP and self.peek().value in ("}", "]")) and self.peek().type != TokType.EOF:
                 self.advance()
             if self.peek().type == TokType.OP and self.peek().value in ("}", "]"):
@@ -654,7 +669,7 @@ class Parser:
         self.skip_to_semi()
         return A.ArrayStmt(name=name, dim=dim, elements=elements, is_char=is_char,
                             length=length, init_values=init_values, lo_bound=lo_bound,
-                            is_temporary=is_temporary)
+                            is_temporary=is_temporary, dims=dims)
 
     @staticmethod
     def _expand_dash_range(elt: str, nxt: str):
@@ -1217,10 +1232,15 @@ class Parser:
         name = self.advance().value.lower()
         if self.peek().type == TokType.OP and self.peek().value in ("{", "["):
             self.advance()
-            idx = self.parse_expr()
+            indices = [self.parse_expr()]
+            while self.peek().type == TokType.COMMA:
+                self.advance()
+                indices.append(self.parse_expr())
             if self.peek().type == TokType.OP and self.peek().value in ("}", "]"):
                 self.advance()
-            return A.ArrayRef(name=name, index=idx)
+            if len(indices) == 1:
+                return A.ArrayRef(name=name, index=indices[0])
+            return A.ArrayRef(name=name, indices=indices)
         return A.Var(name=name)
 
     # ------------- expressions -------------
@@ -1394,10 +1414,15 @@ class Parser:
                 return A.Call(name=name_l, args=args)
             if self.peek().type == TokType.OP and self.peek().value in ("{", "["):
                 self.advance()
-                idx = self.parse_expr()
+                indices = [self.parse_expr()]
+                while self.peek().type == TokType.COMMA:
+                    self.advance()
+                    indices.append(self.parse_expr())
                 if self.peek().type == TokType.OP and self.peek().value in ("}", "]"):
                     self.advance()
-                return A.ArrayRef(name=name_l, index=idx)
+                if len(indices) == 1:
+                    return A.ArrayRef(name=name_l, index=indices[0])
+                return A.ArrayRef(name=name_l, indices=indices)
             return A.Var(name=name_l)
         # fallback: consume token, return missing
         self.advance()

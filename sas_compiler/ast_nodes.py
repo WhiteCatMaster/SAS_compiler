@@ -32,7 +32,8 @@ class Var(Expr):
 @dataclass
 class ArrayRef(Expr):
     name: str
-    index: Expr
+    index: Expr | None = None
+    indices: list | None = None  # multi-dimensional subscripts, e.g. grid{i,j}
 
 
 @dataclass
@@ -132,6 +133,7 @@ class ArrayStmt(Stmt):
     init_values: list = field(default_factory=list)
     lo_bound: int = 1
     is_temporary: bool = False
+    dims: list | None = None  # multi-dim: [(size, lo_bound), ...] per dimension; dim = product
 
 
 @dataclass

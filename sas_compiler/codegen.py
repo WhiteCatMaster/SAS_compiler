@@ -86,6 +86,8 @@ def _rewrite_expr(e: A.Expr, arrname: str, idxvar: str) -> A.Expr:
             return A.ArrayRef(name=arrname, index=A.Var(idxvar))
         return e
     if isinstance(e, A.ArrayRef):
+        if e.indices is not None:
+            return A.ArrayRef(name=e.name, indices=[_rewrite_expr(i, arrname, idxvar) for i in e.indices])
         return A.ArrayRef(name=e.name, index=_rewrite_expr(e.index, arrname, idxvar))
     if isinstance(e, A.BinOp):
         return A.BinOp(e.op, _rewrite_expr(e.left, arrname, idxvar), _rewrite_expr(e.right, arrname, idxvar))
@@ -166,6 +168,34 @@ class CodeGen:
         arrstmt = self.current_arrays.get(name)
         return arrstmt.lo_bound if arrstmt is not None else 1
 
+    def _arr_offset_expr(self, name: str, index_exprs: list, varmap: str = "pdv") -> str:
+        """Python expr computing a flat 0-based offset into _ARR_<name> from
+        one or more SAS subscripts, using row-major layout for multi-dim
+        arrays: offset = sum((idx_k - lo_k) * product(sizes after dim k))."""
+        arrstmt = self.current_arrays.get(name)
+        dims = arrstmt.dims if arrstmt is not None else None
+        if dims is None or len(index_exprs) == 1:
+            # A single subscript: either a genuinely one-dimensional array,
+            # or a flat offset into a multi-dim array's underlying storage
+            # (used internally by DO OVER, which iterates the flat elements
+            # list rather than per-dimension subscripts).
+            if len(index_exprs) != 1:
+                raise CodegenError(f"array {name!r} is one-dimensional but was given {len(index_exprs)} subscripts")
+            ix = self.gen_expr(index_exprs[0], varmap)
+            lo = self._arr_lo(name)
+            return f"int({ix}) - {lo}"
+        if len(index_exprs) != len(dims):
+            raise CodegenError(f"array {name!r} has {len(dims)} dimension(s) but was given {len(index_exprs)} subscripts")
+        parts = []
+        for i, (idx_expr, (_size, lo)) in enumerate(zip(index_exprs, dims)):
+            ix = self.gen_expr(idx_expr, varmap)
+            mult = 1
+            for (sz2, _lo2) in dims[i + 1:]:
+                mult *= sz2
+            term = f"(int({ix}) - {lo})"
+            parts.append(f"{term} * {mult}" if mult != 1 else term)
+        return " + ".join(parts)
+
     def generate(self, prog: A.Program) -> str:
         self.w("import sas_compiler.runtime as _r")
         self.w("import pandas as pd")
@@ -211,9 +241,8 @@ class CodeGen:
         if isinstance(e, A.DotVar):
             return f"{varmap}.get({e.kind + '_' + e.var!r}, False)"
         if isinstance(e, A.ArrayRef):
-            idx = self.gen_expr(e.index, varmap)
-            lo = self._arr_lo(e.name)
-            return f"{varmap}.get(_ARR_{e.name}[int({idx}) - {lo}], _r.MISSING)"
+            idx = self._arr_offset_expr(e.name, e.indices if e.indices is not None else [e.index], varmap)
+            return f"{varmap}.get(_ARR_{e.name}[{idx}], _r.MISSING)"
         if isinstance(e, A.UnaryOp):
             operand = self.gen_expr(e.operand, varmap)
             if e.op == "not":
@@ -322,8 +351,30 @@ class CodeGen:
             m_, d_, y_ = (self.gen_expr(a, varmap) for a in e.args)
             return f"_r.sas_date({y_}, {m_}, {d_})"
         if name in ("dim", "hbound", "lbound") and e.args and isinstance(e.args[0], A.Var):
-            arrstmt = self.current_arrays.get(e.args[0].name)
+            arrname = e.args[0].name
+            arrstmt = self.current_arrays.get(arrname)
             if arrstmt is not None:
+                dim_arg = None
+                if len(e.args) >= 2:
+                    if not isinstance(e.args[1], A.Num):
+                        raise CodegenError(f"{name}(): dimension-number argument must be a constant")
+                    dim_arg = int(e.args[1].value)
+                if arrstmt.dims is not None:
+                    if dim_arg is None:
+                        if name == "dim":
+                            return repr(float(arrstmt.dim))
+                        raise CodegenError(
+                            f"{name}({arrname}) needs an explicit dimension number for "
+                            f"multi-dimensional array {arrname!r}, e.g. {name}({arrname}, 1)"
+                        )
+                    if not (1 <= dim_arg <= len(arrstmt.dims)):
+                        raise CodegenError(f"array {arrname!r} has no dimension {dim_arg}")
+                    size, lo = arrstmt.dims[dim_arg - 1]
+                    if name == "lbound":
+                        return repr(float(lo))
+                    if name == "hbound":
+                        return repr(float(lo + size - 1))
+                    return repr(float(size))
                 if name == "lbound":
                     return repr(float(arrstmt.lo_bound))
                 if name == "hbound":
@@ -424,9 +475,8 @@ class CodeGen:
         if isinstance(s.target, A.Var):
             self.w(f"pdv[{s.target.name!r}] = {expr_code}")
         elif isinstance(s.target, A.ArrayRef):
-            idx = self.gen_expr(s.target.index)
-            lo = self._arr_lo(s.target.name)
-            self.w(f"pdv[_ARR_{s.target.name}[int({idx}) - {lo}]] = {expr_code}")
+            idx = self._arr_offset_expr(s.target.name, s.target.indices if s.target.indices is not None else [s.target.index])
+            self.w(f"pdv[_ARR_{s.target.name}[{idx}]] = {expr_code}")
         else:
             raise CodegenError(f"invalid assignment target {s.target!r}")
 
@@ -602,9 +652,8 @@ class CodeGen:
             if isinstance(target, A.Var):
                 self.w(f"pdv[{target.name!r}] = _r.nomiss_sum(pdv.get({target.name!r}, 0.0), {expr_code})")
             elif isinstance(target, A.ArrayRef):
-                idx = self.gen_expr(target.index)
-                lo = self._arr_lo(target.name)
-                self.w(f"_k = _ARR_{target.name}[int({idx}) - {lo}]")
+                idx = self._arr_offset_expr(target.name, target.indices if target.indices is not None else [target.index])
+                self.w(f"_k = _ARR_{target.name}[{idx}]")
                 self.w(f"pdv[_k] = _r.nomiss_sum(pdv.get(_k, 0.0), {expr_code})")
             return
         if name == "symput":

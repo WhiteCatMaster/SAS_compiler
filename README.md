@@ -72,8 +72,12 @@ supports `TODAY`, `TRIM`, `UPCASE`, `LOWCASE`, `COMPRESS`, `MDY`,
 `first.`/`last.` group processing), dataset options (`DROP=`, `KEEP=`,
 `RENAME=`, `WHERE=`, `IN=`), `ARRAY` (including `array x{n} (v1, v2, ...)`
 initializer lists, numeric or character, with or without explicit element
-names, explicit bounds via `array x{2020:2023}`, and `_TEMPORARY_`
-lookup arrays) plus `DIM()`/`HBOUND()`/`LBOUND()` and `DO OVER`,
+names, explicit bounds via `array x{2020:2023}`, multi-dimensional arrays
+(`array grid{3,4} g1-g12;` / `array rev{1:2, 2023:2024} ...;`, subscripted
+`grid{i,j}`, row-major flat storage, up to 3 dimensions tested) and
+`_TEMPORARY_` lookup arrays) plus `DIM()`/`HBOUND()`/`LBOUND()` (with an
+explicit dimension-number argument for multi-dim arrays, e.g. `DIM(grid,1)`)
+and `DO OVER` (flat row-major iteration for multi-dim arrays),
 `RETAIN`, the sum statement
 (`var + expr;`), `DO`/`DO WHILE`/`DO UNTIL`/iterative `DO`, `IF`/`THEN`/
 `ELSE` and subsetting `IF`, `SELECT (expr); WHEN (...) ...; OTHERWISE ...; END;`
@@ -291,6 +295,15 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   step in the same compiled program, `OPTIONS CMPLIB=` is accepted but
   not required), no `ARRAY` parameters, and no `PROC PROTO`/external
   C-function calls.
+- **Multi-dimensional ARRAYs** are stored flat in row-major order and
+  tested through 3 dimensions (`array c{2,2,2} ...;`); there is no
+  declared cap, but going much higher than that is unverified. Only a
+  single flat, comma/space-separated initializer list is supported
+  (`array g{2,3} g1-g6 (1 2 3 4 5 6)`) — real SAS's nested
+  per-row `(1,2,3) (4,5,6)` initializer grouping is not parsed.
+  `HBOUND`/`LBOUND` on a multi-dim array require an explicit dimension
+  number (`HBOUND(grid, 1)`); calling them with just the array name
+  raises a clear error instead of guessing which dimension was meant.
 
 ## Tests
 
