@@ -79,8 +79,8 @@ default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE`),
 `UNIVARIATE` (moments, mode, quantiles, extreme observations —
-printed
-report only, no `OUTPUT OUT=`), `FORMAT` (see below), and `SQL` — SQL
+printed report only, no `OUTPUT OUT=`), `RANK` (`VAR`/`RANKS`/`BY`,
+`DESCENDING`, average-rank ties), `FORMAT` (see below), and `SQL` — SQL
 statements are executed almost
 verbatim against duckdb with all current datasets registered as views,
 so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)

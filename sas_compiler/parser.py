@@ -941,6 +941,13 @@ class Parser:
                 cond = self.parse_expr()
                 clauses.append(("where", cond))
                 self.skip_to_semi()
+            elif ckw == "ranks":
+                self.advance()
+                names = []
+                while self.peek().type == TokType.IDENT:
+                    names.append(self.advance().value.lower())
+                clauses.append(("ranks", names))
+                self.skip_to_semi()
             else:
                 start = self.peek().pos
                 self.skip_to_semi()

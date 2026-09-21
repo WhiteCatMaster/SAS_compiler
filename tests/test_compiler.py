@@ -671,6 +671,30 @@ def test_temporary_array_lookup():
     assert not any(c.startswith("__tmp_") for c in ds["out"].columns)
 
 
+def test_proc_rank_descending_with_ties():
+    src = """
+    data src;
+      input name $ score;
+      datalines;
+    Alice 90
+    Bob 70
+    Carol 85
+    Dave 70
+    ;
+    run;
+    proc rank data=src out=ranked descending;
+      var score;
+      ranks rank_score;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["ranked"].set_index("name")
+    assert df.loc["Alice", "rank_score"] == 1.0
+    assert df.loc["Carol", "rank_score"] == 2.0
+    assert df.loc["Bob", "rank_score"] == 3.5
+    assert df.loc["Dave", "rank_score"] == 3.5
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

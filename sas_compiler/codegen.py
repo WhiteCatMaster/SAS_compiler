@@ -651,6 +651,8 @@ class CodeGen:
             self._gen_proc_datasets(proc)
         elif name == "univariate":
             self._gen_proc_univariate(proc)
+        elif name == "rank":
+            self._gen_proc_rank(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -970,6 +972,30 @@ class CodeGen:
         self.w("print('  highest: ' + ', '.join(str(v) for v in _sorted.tail(5).tolist()))")
         self.w("print()")
         self.indent -= 1
+
+    def _gen_proc_rank(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        out = normalize_dsname(proc.options["out"]) if isinstance(proc.options.get("out"), str) else dsname
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC RANK requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        ranks_clause = self._clause(proc, "ranks")
+        rank_names = ranks_clause if ranks_clause else var_list
+        by_clause = self._clause(proc, "by")
+        ascending = not proc.options.get("descending")
+
+        self.w(f"_df = _DS[{dsname!r}].copy()")
+        if by_clause:
+            by_list = [n for n, _ in by_clause]
+            self.w(f"_rank_src = _df.groupby({by_list!r}, dropna=False)[{var_list!r}]")
+        else:
+            self.w(f"_rank_src = _df[{var_list!r}]")
+        self.w(f"_ranked = _rank_src.rank(method='average', ascending={ascending!r}, na_option='keep')")
+        for v, rn in zip(var_list, rank_names):
+            self.w(f"_df[{rn!r}] = _ranked[{v!r}]")
+        self.w(f"_DS[{out!r}] = _df")
+        self.last_ds_name = out
 
     def _gen_proc_append(self, proc: A.ProcStep):
         base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None
