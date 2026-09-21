@@ -876,6 +876,26 @@ def apply_ds_opts(df, keep=None, drop=None, rename=None, where=None):
     return df
 
 
+def seed_char_defaults(pdv: dict, skip, *dfs):
+    """Seed pdv[col] = '' for every object-dtype (character) column across
+    the given SET/MERGE/UPDATE source DataFrame(s), so a character variable
+    read before it's explicitly assigned in the DATA step body defaults to
+    blank rather than falling through to numeric-missing (NaN). `skip` is
+    the set of names the compiler already has static evidence for (either
+    already seeded as char, or explicitly declared numeric via LENGTH/
+    ARRAY) -- those are left alone. A name already present in `pdv` (e.g.
+    a RETAIN-seeded numeric initial value) is also left alone."""
+    for df in dfs:
+        if df is None:
+            continue
+        for col in df.columns:
+            if col in skip or col in pdv:
+                continue
+            dt = df[col].dtype
+            if dt == object or pd.api.types.is_string_dtype(dt):
+                pdv[col] = ""
+
+
 def _by_key(row, by_vars):
     return tuple(row.get(v, MISSING) for v in by_vars)
 

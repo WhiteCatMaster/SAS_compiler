@@ -678,6 +678,17 @@ class CodeGen:
                 if self._is_static_char_expr(s.expr):
                     char_vars.add(s.target.name)
 
+        # Names with an explicit *numeric* static declaration: a live
+        # SET/MERGE/UPDATE source's object dtype must not override these
+        # (see seed_char_defaults below).
+        declared_numeric = set()
+        for n, (is_char, _) in lengths.items():
+            if not is_char:
+                declared_numeric.add(n)
+        for arrstmt in arrays.values():
+            if not arrstmt.is_char:
+                declared_numeric.update(arrstmt.elements)
+
         has_explicit_output = any(isinstance(s, A.Output) for s in walk_stmts(ds.statements))
         self.current_arrays = arrays
         self.hidden_vars = set()
@@ -706,6 +717,7 @@ class CodeGen:
         self.w(f"_out_rows = {{{out_init}}}")
 
         by_vars = [v for v, _ in (by_stmt.vars if by_stmt else [])]
+        char_skip = char_vars | declared_numeric
         if merge_stmt is not None:
             self.w("_m_sources = []")
             for (name, opts, db_info) in merge_stmt.datasets:
@@ -713,6 +725,7 @@ class CodeGen:
                 inflag = opts.get("in_flag")
                 inflag_lit = repr(inflag) if inflag else "None"
                 self.w(f"_m_sources.append(({name!r}, {dfcode}, {inflag_lit}))")
+            self.w(f"_r.seed_char_defaults(pdv, {char_skip!r}, *[_s for _, _s, _f in _m_sources])")
             if by_vars:
                 byvars_lit = ", ".join(repr(v) for v in by_vars)
                 self.w(f"_iter = _r.iter_merge_by(_m_sources, [{byvars_lit}])")
@@ -725,6 +738,7 @@ class CodeGen:
                 inflag = opts.get("in_flag")
                 inflag_lit = repr(inflag) if inflag else "None"
                 self.w(f"_m_sources.append(({name!r}, {dfcode}, {inflag_lit}))")
+            self.w(f"_r.seed_char_defaults(pdv, {char_skip!r}, *[_s for _, _s, _f in _m_sources])")
             if by_vars:
                 byvars_lit = ", ".join(repr(v) for v in by_vars)
                 self.w(f"_iter = _r.iter_update_by(_m_sources, [{byvars_lit}])")
@@ -735,6 +749,7 @@ class CodeGen:
             for (name, opts, db_info) in set_stmt.datasets:
                 dfcode = self._gen_ds_opts_expr(name, opts, db_info)
                 self.w(f"_s_dfs.append({dfcode})")
+            self.w(f"_r.seed_char_defaults(pdv, {char_skip!r}, *_s_dfs)")
             if by_vars:
                 byvars_lit = ", ".join(repr(v) for v in by_vars)
                 self.w(f"_iter = _r.iter_concat_by(_s_dfs, [{byvars_lit}])")
