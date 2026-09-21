@@ -845,3 +845,160 @@ def test_macro_driven_data_step():
     """
     ds = run_sas(src)
     assert ds["out"]["flag"].tolist() == ["LOW", "HIGH", "HIGH"]
+
+
+# ---------------- edge cases ----------------
+def test_data_step_zero_output_rows():
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    3
+    ;
+    run;
+    data out;
+      set src;
+      if x > 100;
+    run;
+    """
+    ds = run_sas(src)
+    # NOTE: when a DATA step's output has zero rows, finalize_dataset()
+    # currently has no rows to infer column names from, so the result is
+    # an empty DataFrame with NO columns (not zero rows of the expected
+    # shape) -- see the matching "Known limitations" bullet in README.md.
+    assert len(ds["out"]) == 0
+
+
+def test_all_missing_column_through_proc_means():
+    src = """
+    data src;
+      input x y;
+      datalines;
+    . 1
+    . 2
+    . 3
+    ;
+    run;
+    proc means data=src;
+      var x y;
+      output out=stats mean=avgx avgy;
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["stats"].iloc[0]
+    assert math.isnan(row["avgx"])
+    assert row["avgy"] == 2.0
+
+
+def test_drop_and_keep_together():
+    src = """
+    data out;
+      x = 1;
+      y = 2;
+      z = 3;
+      keep x y;
+      drop y;
+    run;
+    """
+    ds = run_sas(src)
+    assert list(ds["out"].columns) == ["x"]
+
+
+def test_retain_combined_with_array():
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    3
+    ;
+    run;
+    data out;
+      set src;
+      array hist{3} h1-h3;
+      retain h1 0 h2 0 h3 0;
+      do i = 3 to 2 by -1;
+        hist{i} = hist{i - 1};
+      end;
+      hist{1} = x;
+      drop i;
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"]["h1"].tolist() == [1.0, 2.0, 3.0]
+    assert ds["out"]["h2"].tolist() == [0.0, 1.0, 2.0]
+    assert ds["out"]["h3"].tolist() == [0.0, 0.0, 1.0]
+
+
+def test_proc_print_format_and_label_together(capsys):
+    src = """
+    data out;
+      salary = 55000;
+      format salary dollar12.2;
+      label salary = "Annual Salary";
+    run;
+    proc print data=out;
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"]["salary"].tolist() == [55000.0]
+    captured = capsys.readouterr().out
+    assert "Annual Salary" in captured
+    assert "$55,000.00" in captured
+
+
+def test_proc_sort_mixed_ascending_descending():
+    src = """
+    data src;
+      input grp $ x;
+      datalines;
+    a 1
+    a 3
+    b 2
+    b 4
+    ;
+    run;
+    proc sort data=src out=sorted;
+      by grp descending x;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["sorted"]
+    assert df["grp"].tolist() == ["a", "a", "b", "b"]
+    assert df["x"].tolist() == [3.0, 1.0, 4.0, 2.0]
+
+
+def test_merge_with_where_dataset_option():
+    src = """
+    data a;
+      input id x;
+      datalines;
+    1 10
+    2 20
+    3 30
+    ;
+    run;
+    data b;
+      input id y;
+      datalines;
+    1 100
+    2 200
+    3 300
+    ;
+    run;
+    data m;
+      merge a(where=(x >= 20)) b;
+      by id;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["m"].set_index("id")
+    assert math.isnan(df.loc[1.0, "x"])
+    assert df.loc[1.0, "y"] == 100.0
+    assert df.loc[2.0, "x"] == 20.0
+    assert df.loc[2.0, "y"] == 200.0
+    assert df.loc[3.0, "x"] == 30.0
+    assert df.loc[3.0, "y"] == 300.0
