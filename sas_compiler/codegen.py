@@ -245,7 +245,24 @@ class CodeGen:
             return f"{hashref}.clear()"
         if method in ("first", "last", "next", "prev"):
             return f"{hashref}.{method}({varmap})"
+        if method == "output":
+            raise CodegenError(
+                "hash .OUTPUT(dataset: \"name\") must be used as a standalone "
+                "statement, not assigned to a variable"
+            )
         raise CodegenError(f"unsupported hash object method .{e.method}()")
+
+    def _gen_hash_output(self, e: A.HashMethodCall):
+        ds_arg = None
+        for (argname, expr) in e.args:
+            if (argname or "").lower() == "dataset":
+                if not isinstance(expr, A.Str):
+                    raise CodegenError('hash .output() expects dataset: "name"')
+                ds_arg = normalize_dsname(expr.value)
+        if not ds_arg:
+            raise CodegenError('hash .output() requires dataset: "name"')
+        self.w(f"_DS[{ds_arg!r}] = _hashes[{e.hashname!r}].output()")
+        self.last_ds_name = ds_arg
 
     def _gen_binop(self, e: A.BinOp, varmap: str) -> str:
         if e.op == "in":
@@ -349,7 +366,10 @@ class CodeGen:
         elif isinstance(s, A.ContinueStmt):
             self._gen_continue()
         elif isinstance(s, A.ExprStmt):
-            self.w(self.gen_expr(s.expr))
+            if isinstance(s.expr, A.HashMethodCall) and s.expr.method.lower() == "output":
+                self._gen_hash_output(s.expr)
+            else:
+                self.w(self.gen_expr(s.expr))
         elif isinstance(s, A.DeclareHashStmt):
             self._gen_declare_hash(s)
         elif isinstance(s, A.DeclareHiterStmt):
@@ -839,7 +859,7 @@ class CodeGen:
         temp_array_vars = {e for arrstmt in arrays.values() if arrstmt.is_temporary for e in arrstmt.elements}
         auto_drop = (
             {f"first_{v}" for v in by_vars} | {f"last_{v}" for v in by_vars}
-            | self.hidden_vars | temp_array_vars | {"_n_"}
+            | self.hidden_vars | temp_array_vars | {"_n_", "_iorc_"}
         )
         last_name = None
         for (name, opts, db_info) in ds.outputs:
@@ -916,6 +936,13 @@ class CodeGen:
         nobs = opts.get("nobs")
         if isinstance(nobs, str) and nobs:
             self.w(f"pdv[{nobs.lower()!r}] = float(len({dfvar}))")
+        key = opts.get("key")
+        if key:
+            # No persistent SAS index infrastructure: KEY= matches on
+            # whichever of the target dataset's columns are already
+            # present as keys in the current PDV. See keyed_lookup().
+            self.w(f"pdv['_iorc_'] = 0.0 if _r.keyed_lookup({dfvar}, pdv, _row) else 1.0")
+            return
         point = opts.get("point")
         endvar = opts.get("end")
         if point:
