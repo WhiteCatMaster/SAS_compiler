@@ -613,6 +613,10 @@ class CodeGen:
             self._gen_proc_format(proc)
         elif name == "transpose":
             self._gen_proc_transpose(proc)
+        elif name == "import":
+            self._gen_proc_import(proc)
+        elif name == "export":
+            self._gen_proc_export(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -869,6 +873,32 @@ class CodeGen:
         self.indent -= 1
         self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
         self.last_ds_name = out
+
+    def _gen_proc_import(self, proc: A.ProcStep):
+        datafile = proc.options.get("datafile")
+        out = proc.options.get("out")
+        if not isinstance(datafile, str) or not isinstance(out, str):
+            raise CodegenError("PROC IMPORT requires DATAFILE= and OUT=")
+        out = normalize_dsname(out)
+        dbms = str(proc.options.get("dbms", "csv")).lower()
+        if dbms not in ("csv", "dlm", "tab"):
+            raise CodegenError(f"PROC IMPORT: DBMS={dbms.upper()} is not supported (use CSV)")
+        sep = "\t" if dbms == "tab" else ","
+        self.w(f"_df = pd.read_csv({datafile!r}, sep={sep!r})")
+        self.w("_df.columns = [str(c).strip().lower() for c in _df.columns]")
+        self.w(f"_DS[{out!r}] = _df")
+        self.last_ds_name = out
+
+    def _gen_proc_export(self, proc: A.ProcStep):
+        outfile = proc.options.get("outfile")
+        dsname = self._resolve_ds(proc)
+        if not isinstance(outfile, str):
+            raise CodegenError("PROC EXPORT requires OUTFILE=")
+        dbms = str(proc.options.get("dbms", "csv")).lower()
+        if dbms not in ("csv", "dlm", "tab"):
+            raise CodegenError(f"PROC EXPORT: DBMS={dbms.upper()} is not supported (use CSV)")
+        sep = "\t" if dbms == "tab" else ","
+        self.w(f"_DS[{dsname!r}].to_csv({outfile!r}, sep={sep!r}, index=False)")
 
     def _gen_proc_append(self, proc: A.ProcStep):
         base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None

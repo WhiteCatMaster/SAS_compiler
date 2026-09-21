@@ -522,6 +522,27 @@ def test_cli_check_reports_error_cleanly(tmp_path, capsys):
     assert "line" in err
 
 
+def test_proc_import_export_csv(tmp_path):
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text("name,age\nAlice,30\nBob,15\n")
+    csv_out = tmp_path / "out.csv"
+    src = f"""
+    proc import datafile="{csv_in}" out=people dbms=csv replace;
+    run;
+    data adults;
+      set people;
+      if age >= 18;
+    run;
+    proc export data=adults outfile="{csv_out}" dbms=csv replace;
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["people"]["name"].tolist() == ["Alice", "Bob"]
+    assert ds["adults"]["name"].tolist() == ["Alice"]
+    assert csv_out.exists()
+    assert csv_out.read_text().strip().splitlines() == ["name,age", "Alice,30"]
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

@@ -71,8 +71,9 @@ library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
 `SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
 `OUTPUT OUT=`), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
-`TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `FORMAT` (see below),
-and `SQL` — SQL statements are executed almost
+`TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
+(CSV, via `DATAFILE=`/`OUTFILE=`), `FORMAT` (see below), and `SQL` —
+SQL statements are executed almost
 verbatim against duckdb with all current datasets registered as views,
 so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)
 works without any special-casing here.
@@ -96,11 +97,13 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   literal or a char-returning function marks a variable as character);
   an uninitialized character variable read before any assignment may
   come back as missing-numeric instead of blank.
-- **MERGE** handles the common one-to-one / lookup-merge case well.
-  One-to-many merges where *more than one* input dataset has multiple
-  matching rows for the same BY value are approximated (shorter
-  dataset's last row is reused), which can diverge from SAS's documented
-  multi-way merge behavior.
+- **MERGE** handles one-to-one and one-to-many BY-merges correctly.
+  When *more than one* input dataset has multiple rows for the same BY
+  value (many-to-many merges, which SAS itself discourages as
+  order-dependent), an exhausted dataset's last row is held rather than
+  cleared for the remaining iterations — matching SAS's actual
+  "unrefreshed variables keep their prior value" behavior for the common
+  case, though it is not a guarantee for every many-to-many pairing.
 - **`CALL SYMPUT`** writes into a runtime dict but, because macro
   expansion is a complete pass that finishes before the DATA step ever
   runs, it cannot feed back into `%IF`/`%DO` control flow the way real
