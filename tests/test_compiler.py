@@ -569,6 +569,61 @@ def test_proc_means_explicit_stat_keywords():
     assert row["x_p75"] == 4.0
 
 
+def test_proc_datasets_delete_and_change():
+    src = """
+    data temp1 temp2 keep_me;
+      x = 1;
+    run;
+    proc datasets library=work nolist;
+      delete temp1 temp2;
+    run;
+    quit;
+    data renamed;
+      x = 1;
+    run;
+    proc datasets library=work nolist;
+      change renamed=final;
+    run;
+    quit;
+    """
+    ds = run_sas(src)
+    assert "temp1" not in ds
+    assert "temp2" not in ds
+    assert "keep_me" in ds
+    assert "renamed" not in ds
+    assert "final" in ds
+
+
+def test_label_statement_used_as_print_header(capsys):
+    src = """
+    data out;
+      x = 1;
+      y = 2;
+      label x = "First Value" y = "Second Value";
+    run;
+    proc print data=out;
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"]["x"].tolist() == [1.0]  # underlying column name unaffected
+    captured = capsys.readouterr().out
+    assert "First Value" in captured
+    assert "Second Value" in captured
+
+
+def test_include_splices_macro_library(tmp_path):
+    lib = tmp_path / "lib.sas"
+    lib.write_text("%macro double(x);\n  (&x * 2)\n%mend double;\n")
+    src = f"""
+    %include "{lib}";
+    data out;
+      x = %double(21);
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"]["x"].tolist() == [42.0]
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

@@ -375,6 +375,9 @@ class MacroProcessor:
         if wl == "let":
             sc.pos = m.end()
             return True, self._do_let(sc)
+        if wl == "include":
+            sc.pos = m.end()
+            return True, self._do_include(sc)
         if wl in ("global", "local"):
             sc.pos = m.end()
             return True, self._do_scope_decl(sc, wl)
@@ -571,6 +574,30 @@ class MacroProcessor:
         resolved_value = self._parse_program(val_sc, stop_at_mend=False).strip()
         self.set_auto(name, resolved_value)
         return ""
+
+    def _do_include(self, sc: Scanner) -> str:
+        self._skip_ws(sc)
+        if sc.peek() in ("'", '"'):
+            q = sc.peek()
+            sc.pos += 1
+            start = sc.pos
+            while not sc.eof() and sc.peek() != q:
+                sc.pos += 1
+            path = sc.text[start:sc.pos]
+            sc.pos += 1
+        else:
+            start = sc.pos
+            while not sc.eof() and sc.text[sc.pos] not in " \t\r\n;":
+                sc.pos += 1
+            path = sc.text[start:sc.pos]
+        j = sc.text.find(";", sc.pos)
+        sc.pos = (j + 1) if j != -1 else len(sc.text)
+        try:
+            with open(path) as f:
+                content = f.read()
+        except OSError as e:
+            raise MacroError(f"%include: cannot read {path!r}: {e}")
+        return self._parse_program(Scanner(content), stop_at_mend=False)
 
     def _do_scope_decl(self, sc: Scanner, kind: str):
         raw, _ = self._find_top_level(sc, [";"])

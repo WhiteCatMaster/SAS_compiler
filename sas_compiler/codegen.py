@@ -145,6 +145,7 @@ class CodeGen:
         self.w("import duckdb")
         self.w("_DS = {}")
         self.w("_FMT = {}")
+        self.w("_LBL = {}")
         self.w("")
         fnames = []
         for step in prog.steps:
@@ -416,6 +417,7 @@ class CodeGen:
         keeps: set = set()
         lengths: dict = {}
         formats: dict = {}
+        labels: dict = {}
         body = []
 
         for s in ds.statements:
@@ -439,7 +441,7 @@ class CodeGen:
             elif isinstance(s, A.FormatStmt):
                 formats.update(dict(s.entries))
             elif isinstance(s, A.LabelStmt):
-                continue
+                labels.update(dict(s.entries))
             elif isinstance(s, A.InputStmt) and input_stmt is None:
                 input_stmt = s
             elif isinstance(s, A.DatalinesStmt) and datalines_stmt is None:
@@ -567,6 +569,9 @@ class CodeGen:
                 if formats:
                     ds_formats = {rename_map.get(k, k): v for k, v in formats.items()}
                     self.w(f"_FMT[{name!r}] = {{k: v for k, v in {ds_formats!r}.items() if k in _df.columns}}")
+                if labels:
+                    ds_labels = {rename_map.get(k, k): v for k, v in labels.items()}
+                    self.w(f"_LBL[{name!r}] = {{k: v for k, v in {ds_labels!r}.items() if k in _df.columns}}")
         self.indent -= 1  # end def
         if last_name:
             self.last_ds_name = last_name
@@ -638,6 +643,8 @@ class CodeGen:
             self._gen_proc_import(proc)
         elif name == "export":
             self._gen_proc_export(proc)
+        elif name == "datasets":
+            self._gen_proc_datasets(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.indent -= 1
@@ -710,6 +717,8 @@ class CodeGen:
         self.indent -= 1
         self.w("_pf.index = range(1, len(_pf) + 1)")
         self.w("_pf.index.name = 'Obs'")
+        self.w(f"_lbls = _LBL.get({dsname!r}, {{}})")
+        self.w("if _lbls: _pf = _pf.rename(columns=_lbls)")
         self.w("print(_pf.to_string())")
 
     def _gen_proc_sort(self, proc: A.ProcStep):
@@ -730,6 +739,7 @@ class CodeGen:
         self.w(f"_DS[{out!r}] = _df")
         if out != dsname:
             self.w(f"if {dsname!r} in _FMT: _FMT[{out!r}] = _FMT[{dsname!r}]")
+            self.w(f"if {dsname!r} in _LBL: _LBL[{out!r}] = _LBL[{dsname!r}]")
         self.last_ds_name = out
 
     def _requested_stats(self, proc: A.ProcStep) -> list:
@@ -904,6 +914,20 @@ class CodeGen:
             raise CodegenError(f"PROC EXPORT: DBMS={dbms.upper()} is not supported (use CSV)")
         sep = "\t" if dbms == "tab" else ","
         self.w(f"_DS[{dsname!r}].to_csv({outfile!r}, sep={sep!r}, index=False)")
+
+    def _gen_proc_datasets(self, proc: A.ProcStep):
+        for (kind, payload) in proc.clauses:
+            if kind == "delete":
+                for name in payload:
+                    self.w(f"_DS.pop({name!r}, None)")
+                    self.w(f"_FMT.pop({name!r}, None)")
+                    self.w(f"_LBL.pop({name!r}, None)")
+            elif kind == "change":
+                for old, new in payload:
+                    self.w(f"if {old!r} in _DS: _DS[{new!r}] = _DS.pop({old!r})")
+                    self.w(f"if {old!r} in _FMT: _FMT[{new!r}] = _FMT.pop({old!r})")
+                    self.w(f"if {old!r} in _LBL: _LBL[{new!r}] = _LBL.pop({old!r})")
+                    self.last_ds_name = new
 
     def _gen_proc_append(self, proc: A.ProcStep):
         base = normalize_dsname(proc.options["base"]) if isinstance(proc.options.get("base"), str) else None

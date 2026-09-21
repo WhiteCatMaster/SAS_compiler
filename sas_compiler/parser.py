@@ -888,7 +888,25 @@ class Parser:
                 self.skip_to_semi()
                 continue
             ckw = self.peek().value.lower()
-            if ckw in ("var", "by", "class", "id", "freq"):
+            if name == "datasets" and ckw == "delete":
+                self.advance()
+                names = []
+                while self.peek().type == TokType.IDENT:
+                    names.append(self.advance().value.lower())
+                clauses.append(("delete", names))
+                self.skip_to_semi()
+            elif name == "datasets" and ckw in ("change", "rename"):
+                self.advance()
+                pairs = []
+                while self.peek().type == TokType.IDENT:
+                    old = self.advance().value.lower()
+                    if self.peek().type == TokType.OP and self.peek().value == "=":
+                        self.advance()
+                    new = self.advance().value.lower() if self.peek().type == TokType.IDENT else old
+                    pairs.append((old, new))
+                clauses.append(("change", pairs))
+                self.skip_to_semi()
+            elif ckw in ("var", "by", "class", "id", "freq"):
                 self.advance()
                 names = []
                 while self.peek().type == TokType.IDENT:

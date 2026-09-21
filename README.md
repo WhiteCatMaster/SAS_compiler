@@ -53,8 +53,9 @@ params with defaults), `%IF`/`%THEN`/`%ELSE`, iterative/`%WHILE`/`%UNTIL`
 `%DO` loops, `&var`/`&&var` resolution (including indirect references),
 `%PUT`, `%GLOBAL`/`%LOCAL`, `%EVAL`/`%SYSEVALF`, `%STR`/`%NRSTR`, and the
 text functions `%UPCASE`/`%LOWCASE`/`%SUBSTR`/`%SCAN`/`%INDEX`/`%LENGTH`/
-`%TRIM`/`%CMPRES`. `%SYSFUNC` supports a small allowlist (`TODAY`, `TRIM`,
-`UPCASE`, `LOWCASE`, `COMPRESS`).
+`%TRIM`/`%CMPRES`, and `%INCLUDE "file.sas"` to splice in another source
+file. `%SYSFUNC` supports a small allowlist (`TODAY`, `TRIM`, `UPCASE`,
+`LOWCASE`, `COMPRESS`).
 
 **DATA step:** `SET`/`MERGE` (with `BY`, including multi-level
 `first.`/`last.` group processing), dataset options (`DROP=`, `KEEP=`,
@@ -65,8 +66,9 @@ names, and explicit bounds via `array x{2020:2023}`) plus
 (`var + expr;`), `DO`/`DO WHILE`/`DO UNTIL`/iterative `DO`, `IF`/`THEN`/
 `ELSE` and subsetting `IF`, `OUTPUT` (single or multiple output datasets),
 `DROP`/`KEEP`/`LENGTH`, `WHERE`, `PUT`, `CALL SYMPUT`/`CALL MISSING`,
-`INPUT`/`DATALINES`/`CARDS`, `DELETE`, `RETURN`, and a broad function
-library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
+`INPUT`/`DATALINES`/`CARDS`, `DELETE`, `RETURN`, `LABEL` (shown as
+`PROC PRINT` column headers), and a broad function library (string,
+numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
 `SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
@@ -74,8 +76,8 @@ library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
 default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
-(CSV, via `DATAFILE=`/`OUTFILE=`), `FORMAT` (see below), and `SQL` —
-SQL statements are executed almost
+(CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE`),
+`FORMAT` (see below), and `SQL` — SQL statements are executed almost
 verbatim against duckdb with all current datasets registered as views,
 so most standard SQL (joins, GROUP BY/HAVING, window functions, CTEs)
 works without any special-casing here.
