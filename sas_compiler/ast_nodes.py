@@ -212,5 +212,11 @@ class ProcStep:
 
 
 @dataclass
+class LibnameStmt:
+    libref: str
+    conn: str | None  # None means "libname libref clear;"
+
+
+@dataclass
 class Program:
     steps: list

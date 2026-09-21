@@ -26,6 +26,9 @@ class Parser:
         self.source = source
         self.toks = Lexer(source).tokenize()
         self.i = 0
+        self.db_librefs: set = set()  # librefs registered via LIBNAME, tracked
+        # in parse order so later SET/MERGE/DATA-step-output references to
+        # libref.table can be flagged for real-database read/write-through.
 
     def _line_col(self, pos: int) -> tuple[int, int]:
         line = self.source.count("\n", 0, pos) + 1
@@ -94,6 +97,8 @@ class Parser:
                 steps.append(self.parse_data_step())
             elif self.is_kw("proc"):
                 steps.append(self.parse_proc_step())
+            elif self.is_kw("libname"):
+                steps.append(self.parse_libname())
             elif self.peek().type == TokType.SEMI:
                 self.advance()
             else:
@@ -102,6 +107,32 @@ class Parser:
                 self.skip_to_semi()
             self.skip_semis()
         return A.Program(steps=steps)
+
+    def parse_libname(self) -> A.LibnameStmt:
+        self.advance()  # 'libname'
+        libref = self.advance().value.lower()
+        conn = None
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            if self.peek().type == TokType.STRING:
+                conn = self.advance().value
+            else:
+                self.advance()
+        self.skip_to_semi()
+        if conn is not None:
+            self.db_librefs.add(libref)
+        else:
+            self.db_librefs.discard(libref)
+        return A.LibnameStmt(libref=libref, conn=conn)
+
+    def _resolve_ds_ref(self, dotted_name: str):
+        """Split a dotted dataset reference into (flat_name, db_info),
+        where db_info is (libref, table) if the libref was registered via
+        a preceding LIBNAME with a real connection, else None."""
+        parts = dotted_name.split(".")
+        flat = normalize_dsname(dotted_name)
+        if len(parts) == 2 and parts[0].lower() in self.db_librefs:
+            return flat, (parts[0].lower(), parts[1].lower())
+        return flat, None
 
     # ------------- DATA step -------------
     def parse_data_step(self):
@@ -115,13 +146,13 @@ class Parser:
                 while self.peek().type == TokType.OP and self.peek().value == "." and self.peek(1).type == TokType.IDENT:
                     self.advance()
                     name_parts.append(self.advance().value)
-                dsname = normalize_dsname(".".join(name_parts))
+                dsname, db_info = self._resolve_ds_ref(".".join(name_parts))
                 if dsname == "_null_":
                     is_null = True
                 options = {}
                 if self.peek().type == TokType.LPAREN:
                     options = self._parse_dataset_options()
-                outputs.append((dsname, options))
+                outputs.append((dsname, options, db_info))
                 if self.peek().type == TokType.COMMA:
                     self.advance()
                     continue
@@ -240,7 +271,8 @@ class Parser:
             opts = {}
             if self.peek().type == TokType.LPAREN:
                 opts = self._parse_dataset_options()
-            datasets.append((normalize_dsname(name), opts))
+            flat, db_info = self._resolve_ds_ref(name)
+            datasets.append((flat, opts, db_info))
         self.skip_to_semi()
         return A.SetStmt(datasets=datasets)
 
@@ -252,7 +284,8 @@ class Parser:
             opts = {}
             if self.peek().type == TokType.LPAREN:
                 opts = self._parse_dataset_options()
-            datasets.append((normalize_dsname(name), opts))
+            flat, db_info = self._resolve_ds_ref(name)
+            datasets.append((flat, opts, db_info))
         self.skip_to_semi()
         return A.MergeStmt(datasets=datasets, by=[])
 

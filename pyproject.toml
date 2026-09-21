@@ -8,6 +8,7 @@ dependencies = [
     "duckdb>=0.9",
     "statsmodels>=0.14",
     "scipy>=1.10",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]

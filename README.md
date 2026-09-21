@@ -94,6 +94,21 @@ statsmodels — full summary with R², F-stat, coefficient table, and
 `OUTPUT OUT= P=` for predicted probabilities). `MODEL y = x1 x2 ...;`
 is the shared syntax for both REG and LOGISTIC.
 
+**Real databases:** `LIBNAME libref "path/to/file.db";` connects a
+libref to an actual SQLite database file, or `LIBNAME libref
+"postgresql://user:pass@host/db";` (any SQLAlchemy URL) to a real
+server. `SET libref.table;` / `MERGE libref.table ...;` reads real rows
+from it; `DATA libref.table; ... run;` writes the result back to a real
+table (`if_exists="replace"`); and `PROC SQL` transparently `ATTACH`es
+any SQLite libref into its duckdb session, so `SELECT ... FROM
+libref.table` in a query — including one that joins a real database
+table against an in-memory SAS dataset — works natively without any
+extra sync step. `LIBNAME libref CLEAR;` unassigns it. Non-SQLite URLs
+(Postgres/MySQL/etc) work for `SET`/`MERGE`/`DATA` read/write-through
+via SQLAlchemy, but are not yet wired into `PROC SQL`'s duckdb ATTACH
+(only SQLite is) — query those through a `work.` dataset staged via a
+`SET` first.
+
 **Formats:** a `FORMAT` statement's assignments are tracked per dataset
 (and propagate through `PROC SORT`), and `PROC PRINT` renders formatted
 columns accordingly; `PUT(value, format.)` applies a format inline. The
@@ -127,6 +142,10 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - Only `SET`/`MERGE`/`WHERE`/`INPUT`/`DATALINES` at the **top level** of
   a DATA step are supported (not nested inside `IF`/`DO`); table-lookup
   patterns like `SET ds POINT=;` aren't implemented.
+- A `LIBNAME`-backed table can only be read/written via `SET`/`MERGE`/a
+  DATA step's own output list, or (SQLite only) directly in `PROC SQL`.
+  A PROC's own `DATA=`/`OUT=` doesn't resolve a libref table directly —
+  stage it into a `work.` dataset with a `SET` first.
 - Formats affect display (`PROC PRINT`, `PUT()`) but not the underlying
   stored value, and there's no `PROC FORMAT` for user-defined value
   lists — only the built-in format families listed above.

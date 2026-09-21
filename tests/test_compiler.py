@@ -769,6 +769,63 @@ def test_proc_logistic_fits_and_scores():
     assert df.sort_values("hours")["predicted_prob"].is_monotonic_increasing
 
 
+def _seed_sqlite(path, rows):
+    import sqlite3
+    con = sqlite3.connect(str(path))
+    con.execute("CREATE TABLE students (id INTEGER, name TEXT, score REAL)")
+    con.executemany("INSERT INTO students VALUES (?,?,?)", rows)
+    con.commit()
+    con.close()
+
+
+def test_libname_read_through(tmp_path):
+    db_path = tmp_path / "class.db"
+    _seed_sqlite(db_path, [(1, "Alice", 90), (2, "Bob", 70), (3, "Carol", 85)])
+    src = f"""
+    libname classdb "{db_path}";
+    data high;
+      set classdb.students;
+      if score >= 80;
+    run;
+    """
+    ds = run_sas(src)
+    assert sorted(ds["high"]["name"].tolist()) == ["Alice", "Carol"]
+
+
+def test_libname_write_through(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "class.db"
+    _seed_sqlite(db_path, [(1, "Alice", 90), (2, "Bob", 70)])
+    src = f"""
+    libname classdb "{db_path}";
+    data classdb.passing;
+      set classdb.students;
+      passed = (score >= 75);
+    run;
+    """
+    run_sas(src)
+    con = sqlite3.connect(str(db_path))
+    rows = con.execute("SELECT name, passed FROM passing ORDER BY name").fetchall()
+    con.close()
+    assert rows == [("Alice", 1), ("Bob", 0)]
+
+
+def test_proc_sql_attach_sqlite(tmp_path, capsys):
+    db_path = tmp_path / "class.db"
+    _seed_sqlite(db_path, [(1, "Alice", 90), (2, "Bob", 70), (3, "Carol", 85)])
+    src = f"""
+    libname classdb "{db_path}";
+    proc sql;
+      select name, score from classdb.students where score > 70 order by score desc;
+    quit;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Alice" in out
+    assert "Carol" in out
+    assert "Bob" not in out
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;

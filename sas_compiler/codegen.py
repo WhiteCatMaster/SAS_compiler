@@ -127,6 +127,7 @@ class CodeGen:
         self.last_ds_name: str | None = None
         self.current_arrays: dict = {}
         self.hidden_vars: set = set()
+        self.db_libs: dict = {}  # libref -> conn string, in program order
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -153,6 +154,8 @@ class CodeGen:
                 fnames.append(self.gen_data_step(step))
             elif isinstance(step, A.ProcStep):
                 fnames.append(self.gen_proc_step(step))
+            elif isinstance(step, A.LibnameStmt):
+                fnames.append(self.gen_libname_step(step))
         self.w("")
         for fn in fnames:
             self.w(f"{fn}()")
@@ -406,6 +409,20 @@ class CodeGen:
         self.w(f"pass  # unsupported: call {name}(...)")
 
     # ---------------- DATA step ----------------
+    def gen_libname_step(self, stmt: A.LibnameStmt) -> str:
+        self.step_idx += 1
+        fname = f"_step_{self.step_idx}"
+        self.w(f"def {fname}():")
+        self.indent += 1
+        if stmt.conn is not None:
+            self.w(f"_r.libname({stmt.libref!r}, {stmt.conn!r})")
+            self.db_libs[stmt.libref] = stmt.conn
+        else:
+            self.w(f"_r.libname_clear({stmt.libref!r})")
+            self.db_libs.pop(stmt.libref, None)
+        self.indent -= 1
+        return fname
+
     def gen_data_step(self, ds: A.DataStep) -> str:
         self.step_idx += 1
         fname = f"_step_{self.step_idx}"
@@ -488,14 +505,14 @@ class CodeGen:
             elts = ", ".join(repr(x) for x in arrstmt.elements)
             self.w(f"_ARR_{name} = [{elts}]")
 
-        out_init = ", ".join(f"{name!r}: []" for name, _ in ds.outputs)
+        out_init = ", ".join(f"{name!r}: []" for name, _, _ in ds.outputs)
         self.w(f"_out_rows = {{{out_init}}}")
 
         by_vars = [v for v, _ in (by_stmt.vars if by_stmt else [])]
         if merge_stmt is not None:
             self.w("_m_sources = []")
-            for (name, opts) in merge_stmt.datasets:
-                dfcode = self._gen_ds_opts_expr(name, opts)
+            for (name, opts, db_info) in merge_stmt.datasets:
+                dfcode = self._gen_ds_opts_expr(name, opts, db_info)
                 inflag = opts.get("in_flag")
                 inflag_lit = repr(inflag) if inflag else "None"
                 self.w(f"_m_sources.append(({name!r}, {dfcode}, {inflag_lit}))")
@@ -506,8 +523,8 @@ class CodeGen:
                 self.w("_iter = _r.iter_merge_positional([_s for _, _s, _f in _m_sources])")
         elif set_stmt is not None:
             self.w("_s_dfs = []")
-            for (name, opts) in set_stmt.datasets:
-                dfcode = self._gen_ds_opts_expr(name, opts)
+            for (name, opts, db_info) in set_stmt.datasets:
+                dfcode = self._gen_ds_opts_expr(name, opts, db_info)
                 self.w(f"_s_dfs.append({dfcode})")
             if by_vars:
                 byvars_lit = ", ".join(repr(v) for v in by_vars)
@@ -558,7 +575,7 @@ class CodeGen:
             | self.hidden_vars | temp_array_vars
         )
         last_name = None
-        for (name, opts) in ds.outputs:
+        for (name, opts, db_info) in ds.outputs:
             keep_list = sorted(keeps | set(opts.get("keep") or []))
             drop_list = sorted(drops | set(opts.get("drop") or []) | (auto_drop - keeps))
             rename_map = opts.get("rename") or {}
@@ -576,12 +593,20 @@ class CodeGen:
                 if labels:
                     ds_labels = {rename_map.get(k, k): v for k, v in labels.items()}
                     self.w(f"_LBL[{name!r}] = {{k: v for k, v in {ds_labels!r}.items() if k in _df.columns}}")
+                if db_info:
+                    libref, table = db_info
+                    self.w(f"_r.db_write_table({libref!r}, {table!r}, _df)")
         self.indent -= 1  # end def
         if last_name:
             self.last_ds_name = last_name
         return fname
 
-    def _gen_ds_opts_expr(self, name: str, opts: dict) -> str:
+    def _gen_ds_opts_expr(self, name: str, opts: dict, db_info=None) -> str:
+        if db_info:
+            libref, table = db_info
+            src_expr = f"_r.db_read_table({libref!r}, {table!r})"
+        else:
+            src_expr = f"_DS[{name!r}]"
         keep = opts.get("keep") or []
         drop = opts.get("drop") or []
         rename = opts.get("rename") or {}
@@ -590,7 +615,7 @@ class CodeGen:
         if where is not None:
             wherecode = f"(lambda row: _r.truthy({self.gen_expr(where, varmap='row')}))"
         return (
-            f"_r.apply_ds_opts(_DS[{name!r}], keep={keep!r} or None, "
+            f"_r.apply_ds_opts({src_expr}, keep={keep!r} or None, "
             f"drop={drop!r} or None, rename={rename!r} or None, where={wherecode})"
         )
 
@@ -703,6 +728,19 @@ class CodeGen:
         self.indent += 1
         self.w("_con.register(_n, _d)")
         self.indent -= 1
+        sqlite_libs = {lr: c for lr, c in self.db_libs.items() if "://" not in c}
+        if sqlite_libs:
+            self.w("try:")
+            self.indent += 1
+            self.w("_con.execute('INSTALL sqlite; LOAD sqlite;')")
+            for libref, conn in sqlite_libs.items():
+                attach_sql = f"ATTACH {conn!r} AS {libref} (TYPE sqlite);"
+                self.w(f"_con.execute({attach_sql!r})")
+            self.indent -= 1
+            self.w("except Exception as _e:")
+            self.indent += 1
+            self.w("print(f'warning: could not attach SQLite library: {_e}')")
+            self.indent -= 1
         for _, stmt in proc.clauses:
             m = re.match(r"(?is)^\s*create\s+table\s+([A-Za-z_][A-Za-z0-9_.]*)\s+as\s+(select.*)$", stmt)
             self.w(f"_res = _con.execute({stmt!r})")

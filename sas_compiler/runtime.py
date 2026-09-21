@@ -822,3 +822,54 @@ def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None
     for name in out_stats.get("p", []):
         result[name] = model.predict(X)
     return result
+
+
+# ---------------- LIBNAME / real database integration ----------------
+DB_LIBS: dict = {}
+
+
+def libname(libref: str, conn: str):
+    """Register a LIBNAME connection: either a plain SQLite file path, or
+    a full SQLAlchemy URL (postgresql://, mysql://, ...)."""
+    DB_LIBS[libref.lower()] = conn
+
+
+def libname_clear(libref: str):
+    DB_LIBS.pop(libref.lower(), None)
+
+
+def db_read_table(libref: str, table: str) -> pd.DataFrame:
+    conn = DB_LIBS.get(libref.lower())
+    if conn is None:
+        raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    if "://" in conn:
+        import sqlalchemy
+        engine = sqlalchemy.create_engine(conn)
+        df = pd.read_sql_table(table, engine)
+    else:
+        import sqlite3
+        con = sqlite3.connect(conn)
+        try:
+            df = pd.read_sql_query(f"SELECT * FROM {table}", con)
+        finally:
+            con.close()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+
+
+def db_write_table(libref: str, table: str, df: pd.DataFrame, if_exists: str = "replace"):
+    conn = DB_LIBS.get(libref.lower())
+    if conn is None:
+        raise RuntimeError(f"LIBNAME {libref!r} is not assigned")
+    if "://" in conn:
+        import sqlalchemy
+        engine = sqlalchemy.create_engine(conn)
+        df.to_sql(table, engine, if_exists=if_exists, index=False)
+    else:
+        import sqlite3
+        con = sqlite3.connect(conn)
+        try:
+            df.to_sql(table, con, if_exists=if_exists, index=False)
+            con.commit()
+        finally:
+            con.close()
