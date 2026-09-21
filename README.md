@@ -70,7 +70,9 @@ library (string, numeric, date, `LAG`, `IFN`/`IFC`, `COALESCE`, etc).
 
 **PROC steps:** `PRINT` (with an `Obs` column and `FORMAT`-aware display),
 `SORT` (`BY`, `OUT=`, `NODUPKEY`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
-`OUTPUT OUT=`), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
+`OUTPUT OUT=`, and explicit stat keywords — `N MEAN STD MIN MAX SUM
+MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
+default), `FREQ` (one-way and two-way `TABLES`), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `FORMAT` (see below), and `SQL` —
 SQL statements are executed almost

@@ -33,6 +33,27 @@ _DIRECT_FUNCS = {
     "coalescec", "ifn", "ifc", "put", "sas_date",
 }
 
+# PROC MEANS/SUMMARY statistic keyword -> Python expression computing it
+# from `_s` (the analysis variable's non-missing values as a pandas Series)
+# and, for "nmiss" only, the ungrouped `_grp[_v]`.
+_STAT_EXPR = {
+    "n": "float(len(_s))",
+    "mean": "_s.mean() if len(_s) else float('nan')",
+    "std": "_s.std() if len(_s) > 1 else float('nan')",
+    "stddev": "_s.std() if len(_s) > 1 else float('nan')",
+    "min": "_s.min() if len(_s) else float('nan')",
+    "max": "_s.max() if len(_s) else float('nan')",
+    "sum": "_s.sum() if len(_s) else float('nan')",
+    "median": "_s.median() if len(_s) else float('nan')",
+    "var": "_s.var() if len(_s) > 1 else float('nan')",
+    "range": "(_s.max() - _s.min()) if len(_s) else float('nan')",
+    "nmiss": "float(len(_grp[_v]) - len(_s))",
+}
+for _p in (1, 5, 10, 25, 50, 75, 90, 95, 99):
+    _STAT_EXPR[f"p{_p}"] = f"_s.quantile({_p / 100}) if len(_s) else float('nan')"
+
+_DEFAULT_MEANS_STATS = ["n", "mean", "std", "min", "max"]
+
 
 def walk_stmts(stmts):
     for s in stmts:
@@ -711,66 +732,50 @@ class CodeGen:
             self.w(f"if {dsname!r} in _FMT: _FMT[{out!r}] = _FMT[{dsname!r}]")
         self.last_ds_name = out
 
+    def _requested_stats(self, proc: A.ProcStep) -> list:
+        requested = [s for s in _STAT_EXPR if proc.options.get(s) is True]
+        return requested or list(_DEFAULT_MEANS_STATS)
+
     def _gen_proc_means(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
         class_clause = self._clause(proc, "class") or self._clause(proc, "by")
         var_clause = self._clause(proc, "var")
         output_clause = self._clause(proc, "output")
+        stat_names = self._requested_stats(proc)
         self.w(f"_df = _DS[{dsname!r}]")
-        stat_names = ["n", "mean", "std", "min", "max"]
         if var_clause:
             var_list = [n for n, _ in var_clause]
         else:
             self.w("_var_list = [c for c in _df.columns if pd.api.types.is_numeric_dtype(_df[c])]")
             var_list = None
         vl = repr(var_list) if var_list is not None else "_var_list"
-        if class_clause:
-            class_list = [n for n, _ in class_clause]
-            self.w(f"_g = _df.groupby({class_list!r}, dropna=False)")
-            self.w(f"_agg = _g[{vl}].agg(['count', 'mean', 'std', 'min', 'max'])")
-            self.w("print(_agg)")
-            if output_clause and output_clause.get("out"):
-                self.w("_rows = []")
-                self.w(f"for _key, _grp in _df.groupby({class_list!r}, dropna=False):")
-                self.indent += 1
-                self.w(f"_key = _key if isinstance(_key, tuple) else (_key,)")
-                self.w(f"_row = dict(zip({class_list!r}, _key))")
-                self.w(f"for _v in {vl}:")
-                self.indent += 1
-                self.w("_s = _grp[_v].dropna()")
-                for stat, pfn in [("n", "len(_s)"), ("mean", "_s.mean() if len(_s) else float('nan')"),
-                                   ("std", "_s.std() if len(_s) > 1 else float('nan')"),
-                                   ("min", "_s.min() if len(_s) else float('nan')"),
-                                   ("max", "_s.max() if len(_s) else float('nan')"),
-                                   ("sum", "_s.sum() if len(_s) else float('nan')")]:
-                    self.w(f"_row[_v + '_{stat}'] = {pfn}")
-                self.indent -= 1
-                self.w("_rows.append(_row)")
-                self.indent -= 1
-                self._apply_output_rename(output_clause, var_list)
-                out = output_clause["out"]
-                self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
-                self.last_ds_name = out
+        class_list = [n for n, _ in class_clause] if class_clause else []
+
+        self.w("_rows = []")
+        if class_list:
+            self.w(f"for _key, _grp in _df.groupby({class_list!r}, dropna=False):")
+            self.indent += 1
+            self.w("_key = _key if isinstance(_key, tuple) else (_key,)")
+            self.w(f"_row = dict(zip({class_list!r}, _key))")
         else:
-            self.w(f"_agg = _df[{vl}].agg(['count', 'mean', 'std', 'min', 'max'])")
-            self.w("print(_agg)")
-            if output_clause and output_clause.get("out"):
-                self.w("_row = {}")
-                self.w(f"for _v in {vl}:")
-                self.indent += 1
-                self.w("_s = _df[_v].dropna()")
-                for stat, pfn in [("n", "len(_s)"), ("mean", "_s.mean() if len(_s) else float('nan')"),
-                                   ("std", "_s.std() if len(_s) > 1 else float('nan')"),
-                                   ("min", "_s.min() if len(_s) else float('nan')"),
-                                   ("max", "_s.max() if len(_s) else float('nan')"),
-                                   ("sum", "_s.sum() if len(_s) else float('nan')")]:
-                    self.w(f"_row[_v + '_{stat}'] = {pfn}")
-                self.indent -= 1
-                self.w("_rows = [_row]")
-                self._apply_output_rename(output_clause, var_list)
-                out = output_clause["out"]
-                self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
-                self.last_ds_name = out
+            self.w("for _grp in [_df]:")
+            self.indent += 1
+            self.w("_row = {}")
+        self.w(f"for _v in {vl}:")
+        self.indent += 1
+        self.w("_s = _grp[_v].dropna()")
+        for stat in stat_names:
+            self.w(f"_row[_v + '_{stat}'] = {_STAT_EXPR[stat]}")
+        self.indent -= 1
+        self.w("_rows.append(_row)")
+        self.indent -= 1
+
+        self.w("print(pd.DataFrame(_rows).to_string(index=False))")
+        if output_clause and output_clause.get("out"):
+            self._apply_output_rename(output_clause, var_list)
+            out = output_clause["out"]
+            self.w(f"_DS[{out!r}] = pd.DataFrame(_rows)")
+            self.last_ds_name = out
 
     def _apply_output_rename(self, output_clause: dict, var_list):
         renames = {}

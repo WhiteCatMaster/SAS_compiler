@@ -543,6 +543,32 @@ def test_proc_import_export_csv(tmp_path):
     assert csv_out.read_text().strip().splitlines() == ["name,age", "Alice,30"]
 
 
+def test_proc_means_explicit_stat_keywords():
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    3
+    4
+    5
+    ;
+    run;
+    proc means data=src n mean median p25 p75 range noprint;
+      var x;
+      output out=stats;
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["stats"].iloc[0]
+    assert row["x_n"] == 5.0
+    assert row["x_median"] == 3.0
+    assert row["x_range"] == 4.0
+    assert row["x_p25"] == 2.0
+    assert row["x_p75"] == 4.0
+
+
 def test_macro_driven_data_step():
     src = """
     %let cutoff = 50;
