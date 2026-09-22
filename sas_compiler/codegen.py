@@ -1333,6 +1333,8 @@ class CodeGen:
             self._gen_proc_npar1way(proc)
         elif name == "princomp":
             self._gen_proc_princomp(proc)
+        elif name == "factor":
+            self._gen_proc_factor(proc)
         elif name == "cluster":
             self._gen_proc_cluster(proc)
         elif name == "surveyselect":
@@ -2442,6 +2444,36 @@ class CodeGen:
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
         self.w(f"_scored = _r.proc_princomp_fit(_df, {var_list!r}, n={n!r}, use_cov={cov!r}, std_scores={std!r})")
+        if out:
+            self._store_out(out_raw, out, "_scored")
+
+    def _gen_proc_factor(self, proc: A.ProcStep):
+        """PROC FACTOR (exploratory factor analysis via scikit-learn's
+        FactorAnalysis). Mirrors _gen_proc_princomp's structure closely:
+        VAR is required, N= (default: the Kaiser criterion -- see
+        runtime.proc_factor_fit's docstring) picks the number of factors,
+        and OUT= (PROC option or OUTPUT OUT=, same dual-form handling as
+        PRINCOMP) gets the fit-subset rows plus Factor1..FactorN score
+        columns."""
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC FACTOR requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        n_raw = proc.options.get("n")
+        n = int(n_raw) if isinstance(n_raw, str) else None
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_scored = _r.proc_factor_fit(_df, {var_list!r}, n={n!r})")
         if out:
             self._store_out(out_raw, out, "_scored")
 

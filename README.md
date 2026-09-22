@@ -260,7 +260,22 @@ of them), `COV` to fit PCA on the raw covariance matrix instead of the
 default standardize-then-correlation-matrix behavior, and `OUTPUT
 OUT=`/`OUT=` for the input rows plus 1-based `Prin1..PrinN` score
 columns, alongside printed Eigenvalues (Eigenvalue/Difference/
-Proportion/Cumulative) and Eigenvectors tables), and `SURVEYSELECT`
+Proportion/Cumulative) and Eigenvectors tables), `FACTOR` (exploratory
+factor analysis via scikit-learn's `FactorAnalysis` — same `VAR
+var1 var2 ...;` (required) and dual-form `OUTPUT OUT=`/`OUT=` shape as
+`PRINCOMP`, fit on the same standardize-then-correlation-matrix data;
+`N=n` picks the number of factors, and when it's omitted we reproduce
+real SAS FACTOR's own default, the Kaiser criterion — a first pass
+computes the correlation matrix's eigenvalues (`numpy.linalg.eigvalsh`)
+and counts how many exceed 1.0 (clamped to at least 1), then that count
+is used as `n_components` for a second, actual fitting pass. Prints "The
+FACTOR Procedure" and a "Factor Pattern" loadings table (`VAR` variables
+x retained factors), reusing `PRINCOMP`'s Eigenvectors print styling;
+`OUT=` gets the fit-subset rows augmented with 1-based `Factor1..FactorN`
+score columns, matching real SAS's own naming for these. Scope cut: no
+variance-explained table — unlike PCA's components, `FactorAnalysis`
+does not expose a clean per-factor proportion-of-variance figure, so only
+the loadings are printed), and `SURVEYSELECT`
 (simple random sampling — `METHOD=SRS`, the only supported method and
 real SAS's own default, so `METHOD=` can be omitted entirely; exactly
 one of `N=n` (an exact sample size) or `SAMPRATE=rate` (a proportion,
@@ -549,7 +564,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   time).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
