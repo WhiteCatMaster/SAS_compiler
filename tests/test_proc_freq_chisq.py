@@ -1,5 +1,6 @@
 import pandas as pd
 from scipy import stats as _stats
+from sklearn.metrics import cohen_kappa_score
 from statsmodels.stats.contingency_tables import Table2x2
 
 from sas_compiler.macro import MacroProcessor
@@ -227,3 +228,112 @@ def test_freq_measures_non_2x2_warns(capsys):
     # The header names "Relative Risk" up front (as real SAS does), but the
     # actual Relative Risk (Column 1) value row must not appear.
     assert "Relative Risk (Column 1)" not in out
+
+
+def test_freq_agree_high_kappa_matches_sklearn(capsys):
+    # Two raters (rater1, rater2) scoring the same set of categories
+    # (Low/Medium/High); they agree on 7 of 9 cases -> high kappa.
+    src = """
+    data one;
+      input rater1 $ rater2 $;
+      datalines;
+    Low Low
+    Low Low
+    Low Medium
+    Medium Medium
+    Medium Medium
+    Medium Low
+    High High
+    High High
+    High High
+    ;
+    run;
+    proc freq data=one;
+      tables rater1*rater2 / agree;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+
+    df = pd.DataFrame(
+        {
+            "rater1": ["Low", "Low", "Low", "Medium", "Medium", "Medium",
+                       "High", "High", "High"],
+            "rater2": ["Low", "Low", "Medium", "Medium", "Medium", "Low",
+                       "High", "High", "High"],
+        }
+    )
+    expected_kappa = cohen_kappa_score(df["rater1"], df["rater2"])
+    expected_pct = (df["rater1"] == df["rater2"]).mean() * 100.0
+
+    assert "Simple Kappa Coefficient" in out
+    assert "Kappa" in out
+    assert f"{expected_kappa:.4f}" in out
+    assert f"{expected_pct:.1f}" in out
+    assert expected_kappa > 0.5
+
+
+def test_freq_agree_low_kappa_near_random(capsys):
+    # rater2 is essentially a derangement of rater1 over the same three
+    # categories (same marginals, near-random pairing) -> kappa near zero.
+    src = """
+    data one;
+      input rater1 $ rater2 $;
+      datalines;
+    A B
+    A C
+    A B
+    B C
+    B A
+    B C
+    C A
+    C B
+    C A
+    ;
+    run;
+    proc freq data=one;
+      tables rater1*rater2 / agree;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+
+    df = pd.DataFrame(
+        {
+            "rater1": ["A", "A", "A", "B", "B", "B", "C", "C", "C"],
+            "rater2": ["B", "C", "B", "C", "A", "C", "A", "B", "A"],
+        }
+    )
+    expected_kappa = cohen_kappa_score(df["rater1"], df["rater2"])
+
+    assert "Simple Kappa Coefficient" in out
+    assert f"{expected_kappa:.4f}" in out
+    # No agreement at all in this construction -> kappa should be low.
+    assert expected_kappa < 0.3
+
+
+def test_freq_agree_non_square_warns(capsys):
+    # a has 3 levels, b has 2 levels: not a square, same-category table,
+    # so kappa cannot be computed; expect a SAS-style warning, no crash.
+    src = """
+    data one;
+      input a $ b $;
+      datalines;
+    X P
+    X Q
+    Y P
+    Y Q
+    Z P
+    Z Q
+    ;
+    run;
+    proc freq data=one;
+      tables a*b / agree;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Simple Kappa Coefficient" in out
+    assert "WARNING" in out
+    assert "Percent Agreement" not in out
+    assert "Statistic                       Value" not in out

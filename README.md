@@ -123,7 +123,13 @@ test of independence report; `TESTP=` for narrowing the one-way expected
 proportions is out of scope; a `MEASURES` (or `RELRISK`/`RISKDIFF`)
 two-way `TABLES` option reports the odds ratio and relative risk (risk
 ratio), each with a 95% confidence interval, for a strictly 2x2 table —
-any other table shape prints a warning instead of computing them), `APPEND`,
+any other table shape prints a warning instead of computing them; an
+`AGREE` two-way `TABLES` option reports Cohen's Kappa (Simple Kappa
+Coefficient) plus overall percent agreement, for a square table where
+both variables share the same set of categories (e.g. two raters/methods
+scoring the same items) — any other table shape prints a warning instead
+of computing them; the Kappa asymptotic standard error and confidence
+interval that real SAS also reports are out of scope), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`, `PREFIX=`/`SUFFIX=`/`DELIMITER=`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE` —
 including `libref.table` file/table renames and drops),
