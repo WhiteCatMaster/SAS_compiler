@@ -115,14 +115,13 @@ def test_bare_ods_html_with_no_file_is_noop(capsys):
 def test_unsupported_ods_destination_is_ignored_not_an_error(capsys):
     src = """
     ods listing close;
-    ods pdf file="/tmp/should_be_ignored.pdf";
+    ods _all_ close;
     data _null_;
-      put "ods pdf/listing are not implemented, just ignored";
+      put "ods listing/_all_ are not implemented, just ignored";
     run;
-    ods pdf close;
     """
     compile_and_run(src)
-    assert "ods pdf/listing are not implemented, just ignored" in capsys.readouterr().out
+    assert "ods listing/_all_ are not implemented, just ignored" in capsys.readouterr().out
 
 
 def test_exception_between_open_and_close_still_restores_stdout_via_atexit_helper():

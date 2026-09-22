@@ -2551,11 +2551,11 @@ class _OdsHtmlCapture:
 class _OdsBroadcast:
     """What sys.stdout actually points to while >=1 ODS destination is
     open: fans every write out to each currently-open destination's own
-    buffer, so e.g. HTML and RTF can be open at the same time and each
-    independently captures everything printed while IT is open."""
+    buffer, so e.g. HTML, RTF and PDF can be open at the same time and
+    each independently captures everything printed while IT is open."""
 
     def write(self, text):
-        for state in (_ODS_HTML_STATE, _ODS_RTF_STATE):
+        for state in (_ODS_HTML_STATE, _ODS_RTF_STATE, _ODS_PDF_STATE):
             if state["active"]:
                 state["capture"].write(text)
         return len(text)
@@ -2569,6 +2569,7 @@ _ODS_SAVED_STDOUT = {"value": None}
 
 _ODS_HTML_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
 _ODS_RTF_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
+_ODS_PDF_STATE = {"active": False, "path": None, "capture": None, "real_stdout": None}
 
 
 def _ods_redirect_if_needed():
@@ -2578,7 +2579,7 @@ def _ods_redirect_if_needed():
 
 
 def _ods_restore_if_idle():
-    if not _ODS_HTML_STATE["active"] and not _ODS_RTF_STATE["active"]:
+    if not _ODS_HTML_STATE["active"] and not _ODS_RTF_STATE["active"] and not _ODS_PDF_STATE["active"]:
         if _ODS_SAVED_STDOUT["value"] is not None:
             sys.stdout = _ODS_SAVED_STDOUT["value"]
             _ODS_SAVED_STDOUT["value"] = None
@@ -2672,15 +2673,68 @@ def _ods_rtf_document(text: str) -> str:
     )
 
 
+def _ods_pdf_document(text: str, path: str):
+    """Render captured ODS text as a PDF file at `path`, using the same
+    chunk-splitting/table-detection heuristic as the HTML renderer:
+    table-shaped chunks become a reportlab Table flowable (light grid,
+    shaded header row); everything else becomes monospace Preformatted
+    text, mirroring <pre> in _ods_html_document()."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Preformatted, Spacer
+
+    styles = getSampleStyleSheet()
+    mono_style = ParagraphStyle(
+        "ODSMono", parent=styles["Normal"], fontName="Courier", fontSize=9, leading=11
+    )
+
+    flowables = []
+    for chunk in _ods_split_chunks(text):
+        if chunk.strip() == "":
+            continue
+        table = _ods_try_parse_table(chunk)
+        if table:
+            header, body_rows = table
+            data = [header] + body_rows
+            tbl = Table(data, repeatRows=1)
+            tbl.setStyle(
+                TableStyle(
+                    [
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#888888")),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+                        ("FONTNAME", (0, 0), (-1, -1), "Courier"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 9),
+                        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ]
+                )
+            )
+            flowables.append(tbl)
+        else:
+            flowables.append(Preformatted(chunk, mono_style))
+        flowables.append(Spacer(1, 12))
+
+    if not flowables:
+        # SimpleDocTemplate.build([]) raises on an empty flowables list;
+        # a single empty Spacer keeps this a valid (if blank) PDF.
+        flowables = [Spacer(1, 1)]
+
+    SimpleDocTemplate(path, pagesize=letter).build(flowables)
+
+
 def ods_proc_boundary():
     """Called once after every PROC step's own output. Inserts a blank
     line, but only while an ODS destination is actually capturing --
-    this is how the HTML/RTF renderer tells where one PROC's report
+    this is how the HTML/RTF/PDF renderer tells where one PROC's report
     ends and the next begins (they'd otherwise run together with no
     separator, since PROC steps don't print a trailing blank line on
     their own). A complete no-op otherwise, so it never changes
     ordinary (non-ODS) program output."""
-    if _ODS_HTML_STATE["active"] or _ODS_RTF_STATE["active"]:
+    if _ODS_HTML_STATE["active"] or _ODS_RTF_STATE["active"] or _ODS_PDF_STATE["active"]:
         print()
 
 
@@ -2738,6 +2792,28 @@ def ods_rtf_close():
         f.write(doc)
 
 
+def ods_pdf_open(path):
+    """ODS PDF FILE="path"; -- same semantics as ods_html_open() but for
+    the PDF destination; HTML, RTF and PDF may all be open at once."""
+    if _ODS_PDF_STATE["active"]:
+        ods_pdf_close()
+    _ods_redirect_if_needed()
+    capture = _OdsHtmlCapture()
+    _ODS_PDF_STATE.update(active=True, path=path, capture=capture, real_stdout=_ODS_SAVED_STDOUT["value"])
+
+
+def ods_pdf_close():
+    """ODS PDF CLOSE; -- see ods_html_close()."""
+    if not _ODS_PDF_STATE["active"]:
+        return
+    capture = _ODS_PDF_STATE["capture"]
+    path = _ODS_PDF_STATE["path"]
+    _ODS_PDF_STATE.update(active=False, path=None, capture=None, real_stdout=None)
+    _ods_restore_if_idle()
+
+    _ods_pdf_document("".join(capture.buffer), path)
+
+
 def _ods_html_atexit_restore():
     """Safety net: if the process exits (e.g. an unhandled exception in a
     step between ODS HTML FILE= and ODS HTML CLOSE;) while still
@@ -2759,5 +2835,15 @@ def _ods_rtf_atexit_restore():
             pass
 
 
+def _ods_pdf_atexit_restore():
+    """Safety net: see _ods_html_atexit_restore(), for PDF."""
+    if _ODS_PDF_STATE["active"]:
+        try:
+            ods_pdf_close()
+        except Exception:
+            pass
+
+
 atexit.register(_ods_html_atexit_restore)
 atexit.register(_ods_rtf_atexit_restore)
+atexit.register(_ods_pdf_atexit_restore)
