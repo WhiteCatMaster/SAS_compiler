@@ -1769,16 +1769,40 @@ def proc_npar1way_report(df: pd.DataFrame, var_names: list, group_var: str):
     return None
 
 
-def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
+def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None,
+                  vif: bool = False):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual
-    columns per `out_stats` (e.g. {'p': ['pred'], 'r': ['resid']})."""
+    columns per `out_stats` (e.g. {'p': ['pred'], 'r': ['resid']}). When
+    `vif` is true, also print a Variance Inflation Factor table (one row
+    per predictor in `xs`) after the summary."""
     import statsmodels.api as sm
 
     sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
     X = sm.add_constant(sub[xs])
     model = sm.OLS(sub[y], X).fit()
     print(model.summary())
+    if vif:
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+        print()
+        print("Variance Inflation Factor")
+        print(f"  {'Variable':<16}{'VIF':>12}")
+        # X = [const, x1, x2, ...] (add_constant places the constant first),
+        # so predictor xs[i] is column index i + 1 in X.
+        for i, name in enumerate(xs):
+            try:
+                v = variance_inflation_factor(X.values, i + 1)
+            except Exception:
+                v = float("inf")
+            if v != v:  # NaN
+                vstr = "Undefined"
+            elif v in (float("inf"), float("-inf")):
+                vstr = "Inf"
+            else:
+                vstr = f"{v:.4f}"
+            print(f"  {name:<16}{vstr:>12}")
+        print()
     if not out_stats:
         return None
     result = df.loc[sub.index].copy()

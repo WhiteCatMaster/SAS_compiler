@@ -167,8 +167,10 @@ a `DATA=` dataset.
 **Statistics / ML:** `CORR` (Pearson r and p-value matrix, `WITH`
 rectangular form, plus an
 optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
-statsmodels — full summary with R², F-stat, coefficient table, and
-`OUTPUT OUT= P=/R=` for predicted values / residuals), `LOGISTIC`
+statsmodels — full summary with R², F-stat, coefficient table,
+`OUTPUT OUT= P=/R=` for predicted values / residuals, and a
+`MODEL ... / VIF;` option that prints a per-predictor Variance
+Inflation Factor multicollinearity table), `LOGISTIC`
 (binary logistic regression via statsmodels — summary, odds ratios, and
 `OUTPUT OUT= P=` for predicted probabilities), `GLM` (OLS via
 statsmodels like `REG`, plus a `CLASS var1 var2;` statement that

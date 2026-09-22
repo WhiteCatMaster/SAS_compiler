@@ -70,6 +70,34 @@ def test_glm_dummy_encoding_matches_direct_statsmodels_call():
     assert result["pred"].round(6).tolist() == expected_pred.round(6).tolist()
 
 
+def test_glm_model_slash_options_do_not_pollute_predictors():
+    # Regression test for the shared _parse_model_stmt bug: a trailing
+    # `/ options` clause on MODEL used to leak '/' and option keywords into
+    # the predictor list for every _parse_model_stmt caller, including GLM.
+    src = """
+    data src;
+      input grp $ score;
+      datalines;
+    A 10
+    A 10
+    A 10
+    B 20
+    B 20
+    B 20
+    ;
+    run;
+    proc glm data=src;
+      class grp;
+      model score = grp / solution;
+      output out=scored p=predicted r=resid;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    assert df["predicted"].round(6).tolist() == [10.0, 10.0, 10.0, 20.0, 20.0, 20.0]
+    assert all(abs(r) < 1e-6 for r in df["resid"])
+
+
 def test_glm_requires_model_statement():
     from sas_compiler.codegen import CodegenError
 

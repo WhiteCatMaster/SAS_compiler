@@ -813,6 +813,81 @@ def test_proc_reg_fits_and_scores():
     assert all(abs(r) < 1e-6 for r in df["resid"])
 
 
+def test_proc_reg_model_slash_options_do_not_pollute_predictors():
+    # Regression test: MODEL y = x1 x2 / vif; used to mis-tokenize '/' and
+    # 'vif' into the predictor list (xs == ['x1', 'x2', '/', 'vif']),
+    # corrupting the fit. It must now use only x1/x2 as predictors.
+    src = """
+    data src;
+      input x1 x2 y;
+      datalines;
+    1 5 2
+    2 4 4
+    3 3 6
+    4 2 8
+    5 1 10
+    ;
+    run;
+    proc reg data=src;
+      model y = x1 x2 / vif;
+      output out=scored p=predicted r=resid;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    # y = 2*x1 exactly (x2 is irrelevant but must still be accepted as a
+    # real predictor, not corrupted by bogus '/'/'vif' tokens).
+    assert df["predicted"].round(4).tolist() == [2.0, 4.0, 6.0, 8.0, 10.0]
+    assert all(abs(r) < 1e-6 for r in df["resid"])
+
+
+def test_proc_reg_vif_reports_high_for_collinear_and_low_for_independent(capsys):
+    import numpy as np
+    import statsmodels.api as sm
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+    rng = np.random.RandomState(0)
+    n = 200
+    x1 = rng.normal(size=n)
+    x2 = x1 + rng.normal(scale=1e-6, size=n)  # near-perfectly collinear with x1
+    x3 = rng.normal(size=n)  # independent
+    y = 3 * x1 + 2 * x3 + rng.normal(scale=0.1, size=n)
+
+    df = pd.DataFrame({"x1": x1, "x2": x2, "x3": x3, "y": y})
+    lines = "\n".join(f"{a} {b} {c} {d}" for a, b, c, d in zip(x1, x2, x3, y))
+    src = f"""
+    data src;
+      input x1 x2 x3 y;
+      datalines;
+{lines}
+    ;
+    run;
+    proc reg data=src;
+      model y = x1 x2 x3 / vif;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Variance Inflation Factor" in out
+
+    # Cross-check against an independently built design matrix/statsmodels call.
+    X = sm.add_constant(df[["x1", "x2", "x3"]])
+    vif_x1 = variance_inflation_factor(X.values, 1)
+    vif_x2 = variance_inflation_factor(X.values, 2)
+    vif_x3 = variance_inflation_factor(X.values, 3)
+    assert vif_x1 > 1000  # collinear pair -> huge VIF
+    assert vif_x2 > 1000
+    assert vif_x3 < 2  # independent predictor -> VIF near 1
+
+    # The printed VIF table's x3 row should show a small, near-1 VIF value.
+    # (model.summary() above also has an "x3" coefficient row, so only look
+    # at lines after the "Variance Inflation Factor" heading.)
+    vif_section = out.split("Variance Inflation Factor", 1)[1]
+    x3_line = [ln for ln in vif_section.splitlines() if ln.strip().startswith("x3")][0]
+    printed_vif_x3 = float(x3_line.split()[-1])
+    assert abs(printed_vif_x3 - vif_x3) < 1e-3
+
+
 def test_proc_logistic_fits_and_scores():
     src = """
     data src;

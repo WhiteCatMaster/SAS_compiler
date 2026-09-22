@@ -1910,6 +1910,9 @@ class CodeGen:
             raise CodegenError(f"could not parse MODEL statement: {raw!r}")
         y = m.group(1).lower()
         rhs = m.group(2)
+        # Strip a trailing `/ options` clause (e.g. `model y = x1 x2 / vif;`)
+        # before tokenizing predictors, so option keywords never leak into xs.
+        rhs = rhs.split("/", 1)[0]
         xs = [tok.lower() for tok in re.split(r"[\s+]+", rhs.strip()) if tok and tok != "+"]
         return y, xs
 
@@ -2064,6 +2067,8 @@ class CodeGen:
         if not model_raw:
             raise CodegenError("PROC REG requires a MODEL statement")
         y, xs = self._parse_model_stmt(model_raw)
+        model_opts = model_raw.split("/", 1)[1] if "/" in model_raw else ""
+        want_vif = bool(re.search(r"(?i)\bvif\b", model_opts))
         output_clause = self._clause(proc, "output")
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
@@ -2072,7 +2077,10 @@ class CodeGen:
         if output_clause and output_clause.get("out"):
             out = output_clause["out"]
             out_stats_lit = repr(self._output_stat_dict(output_clause))
-        self.w(f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
+        self.w(
+            f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit}, "
+            f"vif={want_vif!r})"
+        )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
 
