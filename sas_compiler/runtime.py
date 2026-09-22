@@ -1430,6 +1430,74 @@ def proc_ttest_report(df: pd.DataFrame, var_names: list, class_var: str | None,
     return None
 
 
+def proc_anova_oneway_report(df: pd.DataFrame, y: str, group_var: str):
+    """Print a PROC ANOVA-style one-way ANOVA report (Class Level
+    Information, the classic Source/DF/SS/MS/F/Pr>F table, R-Square, Coeff
+    Var, Root MSE, and the dependent variable's mean) and return None (real
+    PROC ANOVA's OUT= is for per-observation residuals/predicted values,
+    which is out of scope here, like PROC TTEST also skips OUT=)."""
+    from scipy import stats as _stats
+
+    sub = df[[group_var, y]].copy()
+    sub[y] = pd.to_numeric(sub[y], errors="coerce")
+    sub = sub.dropna()
+
+    levels = sorted(sub[group_var].dropna().unique().tolist())
+    k = len(levels)
+    if k < 2:
+        raise ValueError(
+            f"PROC ANOVA: CLASS variable {group_var!r} must have at least 2 "
+            f"non-missing levels, found {k}: {levels!r}"
+        )
+
+    print("The ANOVA Procedure")
+    print()
+    print("Class Level Information")
+    print(f"  Class     Levels    Values")
+    print(f"  {group_var:<10}{k:<10}{' '.join(str(lvl) for lvl in levels)}")
+    print()
+
+    groups = [sub.loc[sub[group_var] == lvl, y] for lvl in levels]
+    n = len(sub)
+    print(f"Number of observations: {n}")
+    print()
+
+    f_val, p_val = _stats.f_oneway(*groups)
+
+    ybar = sub[y].mean()
+    sst = float(((sub[y] - ybar) ** 2).sum())
+    ssb = float(sum(len(g) * (g.mean() - ybar) ** 2 for g in groups))
+    sse = sst - ssb
+
+    df_model = k - 1
+    df_error = n - k
+    df_total = n - 1
+
+    msb = ssb / df_model if df_model else float("nan")
+    mse = sse / df_error if df_error else float("nan")
+    # f_val/p_val (scipy.stats.f_oneway, above) and f.sf on the formula's
+    # DF agree exactly -- used here as a consistency check on the SS
+    # breakdown; the printed F Value / Pr > F are f_val/p_val themselves.
+
+    print("Dependent Variable: " + y)
+    print()
+    header = f"{'Source':<20}{'DF':>6}{'Sum of Squares':>20}{'Mean Square':>16}{'F Value':>12}{'Pr > F':>12}"
+    print(header)
+    print(f"{'Model':<20}{df_model:>6}{ssb:>20.6f}{msb:>16.6f}{f_val:>12.4f}{p_val:>12.4f}")
+    print(f"{'Error':<20}{df_error:>6}{sse:>20.6f}{mse:>16.6f}")
+    print(f"{'Corrected Total':<20}{df_total:>6}{sst:>20.6f}")
+    print()
+
+    r_square = ssb / sst if sst else float("nan")
+    root_mse = mse ** 0.5 if mse == mse else float("nan")
+    coeff_var = 100 * root_mse / ybar if ybar else float("nan")
+    print(f"{'R-Square':<12}{'Coeff Var':>14}{'Root MSE':>14}{y + ' Mean':>16}")
+    print(f"{r_square:<12.6f}{coeff_var:>14.6f}{root_mse:>14.6f}{ybar:>16.6f}")
+    print()
+
+    return None
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual

@@ -1257,6 +1257,8 @@ class CodeGen:
             self._gen_proc_compare(proc)
         elif name == "ttest":
             self._gen_proc_ttest(proc)
+        elif name == "anova":
+            self._gen_proc_anova(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -1972,6 +1974,38 @@ class CodeGen:
             f"_r.proc_ttest_report(_df, {var_names!r}, {class_var!r}, "
             f"{paired_pairs!r}, h0={h0!r})"
         )
+
+    def _gen_proc_anova(self, proc: A.ProcStep):
+        """One-way ANOVA only: exactly one CLASS variable and a MODEL
+        statement whose right-hand side is that same variable."""
+        dsname = self._resolve_ds(proc)
+        class_clause = self._clause(proc, "class")
+        if not class_clause:
+            raise CodegenError("PROC ANOVA requires a CLASS statement")
+        if len(class_clause) != 1:
+            raise CodegenError(
+                "PROC ANOVA: multi-way ANOVA (more than one CLASS variable) "
+                "is not supported here; only one-way ANOVA is supported"
+            )
+        class_var = class_clause[0][0]
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC ANOVA requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        if len(xs) != 1:
+            raise CodegenError(
+                "PROC ANOVA: multi-way ANOVA (more than one variable on the "
+                "right-hand side of MODEL) is not supported here; only "
+                "one-way ANOVA (MODEL y = class_var;) is supported"
+            )
+        if xs[0] != class_var:
+            raise CodegenError(
+                f"PROC ANOVA: MODEL right-hand side variable {xs[0]!r} must "
+                f"match the CLASS variable {class_var!r} for one-way ANOVA"
+            )
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_r.proc_anova_oneway_report(_df, {y!r}, {class_var!r})")
 
     def _gen_proc_reg(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
