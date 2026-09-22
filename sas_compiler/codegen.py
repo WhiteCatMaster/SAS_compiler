@@ -2161,6 +2161,8 @@ class CodeGen:
         if not model_raw:
             raise CodegenError("PROC LOGISTIC requires a MODEL statement")
         y, xs = self._parse_model_stmt(model_raw)
+        class_clause = self._clause(proc, "class")
+        class_vars = [n for n, _ in class_clause] if class_clause else []
         output_clause = self._clause(proc, "output")
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
@@ -2169,7 +2171,10 @@ class CodeGen:
         if output_clause and output_clause.get("out"):
             out = output_clause["out"]
             out_stats_lit = repr(self._output_stat_dict(output_clause))
-        self.w(f"_scored = _r.proc_logistic_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})")
+        self.w(
+            f"_scored = _r.proc_logistic_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit}, "
+            f"class_vars={class_vars!r})"
+        )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
 
