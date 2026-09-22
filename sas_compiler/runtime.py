@@ -1512,6 +1512,38 @@ def proc_freq_chisq(df: pd.DataFrame, v1: str, v2: str):
     return None
 
 
+def proc_freq_chisq_oneway(df: pd.DataFrame, var: str):
+    """Print a PROC FREQ CHISQ-style Pearson chi-square goodness-of-fit
+    report for a one-way table (var), testing the null hypothesis that
+    all observed levels are equally likely (SAS's default when no
+    TESTP= option narrows the expected proportions; TESTP= itself is
+    out of scope here). Returns None (real PROC FREQ's CHISQ option has
+    no OUT= dataset)."""
+    from scipy import stats as _stats
+
+    s = df[var].dropna()
+    print("Chi-Square Goodness-of-Fit Test")
+    print()
+    vc = s.value_counts(dropna=True)
+    k = len(vc)
+    if k < 2:
+        print("WARNING: Variable has fewer than 2 non-missing levels; "
+              "chi-square goodness-of-fit statistics cannot be computed.")
+        print()
+        return None
+
+    observed = vc.to_numpy(dtype=float)
+    n = observed.sum()
+    expected = np.full(k, n / k)
+    chi2, p = _stats.chisquare(observed, f_exp=expected)
+    dof = k - 1
+
+    print("Statistic                     DF       Value      Prob")
+    print(f"Chi-Square                    {dof:<8} {chi2:>10.4f}  {p:.4f}")
+    print()
+    return None
+
+
 def proc_anova_oneway_report(df: pd.DataFrame, y: str, group_var: str):
     """Print a PROC ANOVA-style one-way ANOVA report (Class Level
     Information, the classic Source/DF/SS/MS/F/Pr>F table, R-Square, Coeff

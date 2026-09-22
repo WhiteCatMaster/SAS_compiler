@@ -62,16 +62,23 @@ def test_freq_chisq_two_way_matches_scipy(capsys):
     assert "2.0000" in out
 
 
-def test_freq_chisq_ignored_for_one_way_table(capsys):
-    # CHISQ only applies to two-way tables; for a one-way TABLES request
-    # it should simply be ignored (no crash, no chi-square report).
+def test_freq_chisq_oneway_matches_scipy(capsys):
+    # Clearly non-uniform one-way distribution across three levels:
+    # A appears 6 times, B 3 times, C 1 time (10 observations, 3 levels).
     src = """
     data one;
       input g $;
       datalines;
     A
     A
+    A
+    A
+    A
+    A
     B
+    B
+    B
+    C
     ;
     run;
     proc freq data=one;
@@ -80,7 +87,41 @@ def test_freq_chisq_ignored_for_one_way_table(capsys):
     """
     run_sas(src)
     out = capsys.readouterr().out
-    assert "Chi-Square" not in out
+
+    observed = [6, 3, 1]
+    expected = [10 / 3, 10 / 3, 10 / 3]
+    chi2, p = _stats.chisquare(observed, f_exp=expected)
+    dof = len(observed) - 1
+
+    # Frequency table is printed first, chi-square report follows.
+    assert "Chi-Square Goodness-of-Fit Test" in out
+    assert str(dof) in out
+    assert f"{chi2:.4f}" in out
+    assert f"{p:.4f}" in out
+
+
+def test_freq_chisq_oneway_single_level_warns(capsys):
+    # A single distinct level cannot be tested against equal proportions;
+    # expect a SAS-style warning instead of a crash.
+    src = """
+    data one;
+      input g $;
+      datalines;
+    A
+    A
+    A
+    ;
+    run;
+    proc freq data=one;
+      tables g / chisq;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Chi-Square Goodness-of-Fit Test" in out
+    assert "WARNING" in out
+    # No Statistic/DF/Value/Prob line should follow the warning.
+    assert "Statistic " not in out
 
 
 def test_freq_chisq_independent_table_high_pvalue(capsys):
