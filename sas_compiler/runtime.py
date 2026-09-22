@@ -2770,8 +2770,54 @@ def _ods_rtf_escape(text: str) -> str:
     return "\\par\n".join(text.split("\n"))
 
 
+def _ods_rtf_table(header: list, body_rows: list) -> str:
+    """Render one table-shaped chunk as real RTF table markup: a
+    \\trowd/\\cellx row definition (repeated per row, since RTF has no
+    single table-wide element) with \\intbl-marked, \\cell-terminated
+    cells and a trailing \\row. Column widths are sized (roughly) by
+    each column's widest cell, in twips. Ends with \\pard so content
+    following the table (joined in by the caller) isn't left "inside"
+    table formatting."""
+    ncols = len(header)
+    widths = []
+    for i in range(ncols):
+        widest = max(len(header[i]), max((len(r[i]) for r in body_rows), default=0))
+        widths.append(max(1200, widest * 120 + 400))
+    cellx = []
+    running = 0
+    for w in widths:
+        running += w
+        cellx.append(running)
+    cellx_str = "".join(f"\\cellx{x}" for x in cellx)
+
+    def row_rtf(cells, bold):
+        line = "\\trowd " + cellx_str + "\n\\intbl "
+        for c in cells:
+            esc = _ods_rtf_escape(c)
+            line += f"\\b {esc}\\b0 \\cell " if bold else f"{esc}\\cell "
+        return line + "\\row"
+
+    rows = [row_rtf(header, True)] + [row_rtf(r, False) for r in body_rows]
+    return "\n".join(rows) + "\n\\pard"
+
+
 def _ods_rtf_document(text: str) -> str:
-    body = _ods_rtf_escape(text)
+    """Render captured ODS text as an RTF document body, using the same
+    chunk-splitting/table-detection heuristic as the HTML/PDF renderers:
+    table-shaped chunks become real \\trowd/\\cellx/\\intbl/\\row table
+    markup (bold header row); everything else stays \\par-separated
+    preformatted text, exactly as before."""
+    parts = []
+    for chunk in _ods_split_chunks(text):
+        if chunk.strip() == "":
+            continue
+        table = _ods_try_parse_table(chunk)
+        if table:
+            header, body_rows = table
+            parts.append(_ods_rtf_table(header, body_rows))
+        else:
+            parts.append(_ods_rtf_escape(chunk))
+    body = "\n\\par\n".join(parts)
     return (
         "{\\rtf1\\ansi\\deff0\n"
         "{\\fonttbl{\\f0\\fmodern Courier New;}}\n"

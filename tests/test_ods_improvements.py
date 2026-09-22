@@ -172,3 +172,53 @@ def test_ods_proc_boundary_is_noop_when_nothing_open(capsys):
 def test_rtf_close_without_open_is_a_noop():
     _r.ods_rtf_close()
     assert _r._ODS_RTF_STATE["active"] is False
+
+
+def test_rtf_renders_real_table_for_three_plus_column_output(tmp_path):
+    out_path = tmp_path / "report.rtf"
+    src = f"""
+    data a;
+      input name $ score bonus;
+      datalines;
+    Alice 90 5
+    Bob 80 3
+    ;
+    run;
+
+    ods rtf file="{out_path}";
+    proc print data=a;
+    run;
+    ods rtf close;
+    """
+    compile_and_run(src)
+    content = out_path.read_text()
+    assert "\\trowd" in content
+    assert "\\cellx" in content
+    assert "\\intbl" in content
+    assert "\\row" in content
+    assert "Alice" in content
+    assert "Obs" in content
+
+
+def test_rtf_falls_back_to_par_preformatted_for_narrow_output(tmp_path):
+    # a single-VAR PROC PRINT (Obs + one column = 2 fields) stays
+    # \par-separated preformatted text, not a table -- matching the
+    # pre-existing narrow-output behavior for HTML.
+    out_path = tmp_path / "narrow.rtf"
+    src = f"""
+    data a;
+      x = 1;
+      output;
+      x = 2;
+      output;
+    run;
+
+    ods rtf file="{out_path}";
+    proc print data=a;
+    run;
+    ods rtf close;
+    """
+    compile_and_run(src)
+    content = out_path.read_text()
+    assert "\\trowd" not in content
+    assert "\\par" in content
