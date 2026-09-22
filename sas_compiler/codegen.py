@@ -1943,6 +1943,7 @@ class CodeGen:
         self.w("print('Extreme Observations (lowest / highest):')")
         self.w("print('  lowest: ' + ', '.join(str(v) for v in _sorted.head(5).tolist()))")
         self.w("print('  highest: ' + ', '.join(str(v) for v in _sorted.tail(5).tolist()))")
+        self.w("_r.proc_univariate_normality(_s)")
         self.w("print()")
         self.indent -= 1
         output_clause = self._clause(proc, "output")

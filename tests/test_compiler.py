@@ -724,6 +724,90 @@ def test_proc_univariate_output(capsys):
     assert "50%  3.0" in out
 
 
+def test_proc_univariate_normality_matches_scipy(capsys):
+    import re
+
+    from scipy import stats as _stats
+
+    vals = [2, 4, 4, 4, 5, 5, 7, 9]
+    src = """
+    data src;
+      input x;
+      datalines;
+    2
+    4
+    4
+    4
+    5
+    5
+    7
+    9
+    ;
+    run;
+    proc univariate data=src;
+      var x;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Tests for Normality" in out
+
+    s = pd.Series(vals, dtype=float)
+    exp_w, exp_wp = _stats.shapiro(s)
+    exp_d, exp_dp = _stats.kstest(
+        s, _stats.norm(loc=s.mean(), scale=s.std(ddof=1)).cdf
+    )
+
+    m = re.search(r"Shapiro-Wilk\s+W=([\-0-9.]+)\s+Pr < W=([\-0-9.]+)", out)
+    assert m, out
+    assert float(m.group(1)) == pytest.approx(exp_w, abs=1e-4)
+    assert float(m.group(2)) == pytest.approx(exp_wp, abs=1e-4)
+
+    m = re.search(r"Kolmogorov-Smirnov\s+D=([\-0-9.]+)\s+Pr > D=([\-0-9.]+)", out)
+    assert m, out
+    assert float(m.group(1)) == pytest.approx(exp_d, abs=1e-4)
+    assert float(m.group(2)) == pytest.approx(exp_dp, abs=1e-4)
+
+
+def test_proc_univariate_normality_small_n_not_computed(capsys):
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    ;
+    run;
+    proc univariate data=src;
+      var x;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Shapiro-Wilk       not computed (N < 3)" in out
+    assert "Kolmogorov-Smirnov D=" in out or "Kolmogorov-Smirnov not computed" in out
+
+
+def test_proc_univariate_normality_constant_column_not_computed(capsys):
+    src = """
+    data src;
+      input x;
+      datalines;
+    5
+    5
+    5
+    5
+    ;
+    run;
+    proc univariate data=src;
+      var x;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "Kolmogorov-Smirnov not computed (zero variance)" in out
+
+
 def test_temporary_array_lookup():
     src = """
     data src;
