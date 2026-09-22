@@ -1350,6 +1350,8 @@ class CodeGen:
             self._gen_proc_discrim(proc)
         elif name == "robustreg":
             self._gen_proc_robustreg(proc)
+        elif name == "quantreg":
+            self._gen_proc_quantreg(proc)
         elif name == "mixed":
             self._gen_proc_mixed(proc)
         elif name == "timeseries":
@@ -2233,6 +2235,59 @@ class CodeGen:
             out_stats_lit = repr(self._output_stat_dict(output_clause))
         self.w(
             f"_scored = _r.proc_robustreg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})"
+        )
+        if out:
+            self._store_out(output_clause.get("out_raw"), out, "_scored")
+
+    def _gen_proc_quantreg(self, proc: A.ProcStep):
+        """Quantile regression via statsmodels QuantReg -- structurally
+        identical to PROC REG/PROC ROBUSTREG, swapping OLS/RLM for
+        QuantReg.fit(q=quantile). QUANTILE= (a PROC-statement option here,
+        rather than real SAS QUANTREG's separate QUANTILE statement) picks
+        the single quantile to fit, defaulting to 0.5 (the median) exactly
+        like real SAS QUANTREG's own default. Only a single quantile value
+        is supported: real SAS QUANTREG can fit several quantiles in one
+        run via a space-/paren-separated QUANTILE= list, which is out of
+        scope here -- the parser collects every value given so this raises
+        a clear error instead of silently keeping only the first. No CLASS
+        statement (same plain-numeric-predictor scope cut as PROC REG), and
+        no MODEL `/` options (VIF/SELECTION= etc. are PROC REG's own
+        territory). OUTPUT OUT= P=/R= mirrors PROC REG exactly, since
+        QuantReg's fitted result exposes .predict()/.resid the same way
+        OLS's does."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC QUANTREG requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        quantile_raw = proc.options.get("quantile")
+        if isinstance(quantile_raw, list):
+            if len(quantile_raw) > 1:
+                raise CodegenError(
+                    "PROC QUANTREG: only a single QUANTILE= value is supported; "
+                    f"got {len(quantile_raw)} values ({' '.join(quantile_raw)}); "
+                    "fitting multiple quantiles in one run is not supported"
+                )
+            quantile = float(quantile_raw[0]) if quantile_raw else 0.5
+        elif quantile_raw is not None:
+            quantile = float(quantile_raw)
+        else:
+            quantile = 0.5
+        if not 0.0 < quantile < 1.0:
+            raise CodegenError(
+                f"PROC QUANTREG: QUANTILE={quantile!r} must be strictly between 0 and 1"
+            )
+        output_clause = self._clause(proc, "output")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        out_stats_lit = "None"
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_stats_lit = repr(self._output_stat_dict(output_clause))
+        self.w(
+            f"_scored = _r.proc_quantreg_fit(_df, {y!r}, {xs!r}, quantile={quantile!r}, "
+            f"out_stats={out_stats_lit})"
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")

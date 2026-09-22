@@ -1550,8 +1550,25 @@ class Parser:
             if self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP and self.peek(1).value == "=":
                 key = self.advance().value.lower()
                 self.advance()
-                val = self._read_dotted_name() if self.peek().type == TokType.IDENT else self.advance().value
-                options[key] = val
+                if name == "quantreg" and key == "quantile":
+                    # QUANTILE= may be given as a single value or (out of
+                    # scope here) a space-separated / parenthesized list of
+                    # several quantiles, e.g. QUANTILE=0.25 0.5 0.75 or
+                    # QUANTILE=(0.25 0.5 0.75). Collect every value so
+                    # codegen can raise a clear error for the multi-value
+                    # case instead of silently keeping only the first.
+                    vals = []
+                    paren = self.peek().type == TokType.LPAREN
+                    if paren:
+                        self.advance()
+                    while self.peek().type == TokType.NUMBER:
+                        vals.append(self.advance().value)
+                    if paren and self.peek().type == TokType.RPAREN:
+                        self.advance()
+                    options[key] = vals
+                else:
+                    val = self._read_dotted_name() if self.peek().type == TokType.IDENT else self.advance().value
+                    options[key] = val
             elif self.peek().type == TokType.IDENT:
                 flag = self.advance().value
                 if flag.lower() == "data":

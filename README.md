@@ -388,6 +388,21 @@ outliers in `y` get down-weighted instead of dominating the fit; same
 implemented, and an explicit `MODEL ... / METHOD=other;` raises a
 compile error rather than being approximated; no `VIF`/`SELECTION=`
 like `REG`'s newer options), and
+`QUANTREG` (quantile regression via statsmodels
+`QuantReg` — structurally identical to `REG`/`ROBUSTREG`, swapping
+ordinary least squares for `QuantReg.fit(q=quantile)` so the fitted
+line tracks a conditional quantile of `y` instead of its mean; same
+plain-numeric `MODEL y = x1 x2 ...;` baseline (no `CLASS`) and the same
+`OUTPUT OUT= P=/R=` support as `REG`/`ROBUSTREG`. A `QUANTILE=` PROC-
+statement option (real SAS QUANTREG instead has a separate `QUANTILE`
+statement) picks the quantile to fit, a float strictly between 0 and 1,
+defaulting to `0.5` (the median) — matching real SAS QUANTREG's own
+default. Prints "The QUANTREG Procedure" plus the fitted quantile
+before the statsmodels summary, mirroring `REG`/`ROBUSTREG`. Scope cut:
+real SAS QUANTREG can fit several quantiles in one run via a
+space-/paren-separated `QUANTILE=0.25 0.5 0.75` list — only a single
+quantile value is supported here, and giving more than one raises a
+clear compile error rather than silently keeping only the first), and
 `MIXED` (linear mixed-effects models via statsmodels
 `MixedLM` — scoped down hard to a single random-intercept model: the
 shared `MODEL y = x1 x2 ...;` syntax for the fixed effects (plain
@@ -463,8 +478,8 @@ statement has many derivative-/confidence-interval-related keywords out
 of scope here) — `NLIN` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
-`GENMOD`, `ROBUSTREG`, `MIXED`, and `PLS` (`NLIN` uses its own `MODEL
-y = <expr>;` shape, described above, not this shared one).
+`GENMOD`, `ROBUSTREG`, `QUANTREG`, `MIXED`, and `PLS` (`NLIN` uses its
+own `MODEL y = <expr>;` shape, described above, not this shared one).
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -632,7 +647,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/
-  `TIMESERIES`/`PLS`/`NLIN` raise a clear
+  `TIMESERIES`/`PLS`/`NLIN`/`QUANTREG` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
