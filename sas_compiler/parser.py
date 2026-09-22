@@ -1113,6 +1113,7 @@ class Parser:
                 decimals = None
                 start = None
                 end = None
+                informat = None
                 if self.peek().type == TokType.NUMBER:
                     nxt1 = self.peek(1)
                     if nxt1.type == TokType.OP and nxt1.value == "-":
@@ -1140,8 +1141,38 @@ class Parser:
                             has_control = True
                         # else: a bare trailing number with no '.' isn't a
                         # recognized width informat; leave it unconsumed.
+                elif self.peek().type == TokType.IDENT and (
+                    (self.peek(1).type == TokType.OP and self.peek(1).value == ".")
+                    or (
+                        self.peek(1).type == TokType.NUMBER
+                        and self.peek(1).value.startswith(".")
+                    )
+                ):
+                    # Named informat, e.g. `dt date9.` / `amt comma8.2` --
+                    # tokenizes as IDENT(name) then a '.' suffix (bare OP '.'
+                    # or a fused NUMBER '.N' when decimals follow). A genuine
+                    # next variable name is never immediately followed by
+                    # '.' here, so this can't be confused with `input a b;`.
+                    # Reuse the same fused-suffix consumption FORMAT/PUT
+                    # format specs already use (_consume_format_suffix)
+                    # rather than reinventing it.
+                    raw_name = self.advance().value
+                    full = self._consume_format_suffix(raw_name)
+                    base, _, dec_part = full.partition(".")
+                    m = re.match(r"^([a-zA-Z]+)(\d*)$", base)
+                    if m:
+                        informat = m.group(1).lower()
+                        if m.group(2):
+                            width = int(m.group(2))
+                    else:
+                        informat = base.lower()
+                    if dec_part:
+                        decimals = int(dec_part)
+                    has_control = True
                 varlist.append((name, is_char))
-                items.append(("var", name, is_char, width, decimals, start, end))
+                items.append(
+                    ("var", name, is_char, width, decimals, start, end, informat)
+                )
                 continue
             # unrecognized token (e.g. stray punctuation): skip it, mirroring
             # the old skip-to-semi tolerance.
