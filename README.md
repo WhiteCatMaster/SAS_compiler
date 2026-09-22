@@ -293,7 +293,7 @@ transfer-function (ARIMAX) terms, no `OUTLIER` statement, no `ESTIMATE
 METHOD=`; `FORECAST ID=` is parsed (so it doesn't error) but real
 date-arithmetic extrapolation of that variable is not implemented —
 forecast periods in `OUT=` are always sequential integers `1..LEAD`),
-and `LIFETEST` (Kaplan-Meier survival curve estimation via
+`LIFETEST` (Kaplan-Meier survival curve estimation via
 `statsmodels.duration.survfunc.SurvfuncRight` — `TIME
 timevar*censorvar(censorvalue);` is required and names the
 time-to-event variable, the censoring-status variable, and the single
@@ -321,9 +321,27 @@ section listing each predictor's `exp(coef)`. Scope cuts: only a
 single censor value is supported (real SAS PHREG allows
 `censor(v1, v2, ...)`), there is no `OUTPUT OUT=` for risk
 scores/residuals, no `STRATA` statement, and no time-dependent
-covariates — print-only, like `TTEST`/`ANOVA`/`CLUSTER`).
+covariates — print-only, like `TTEST`/`ANOVA`/`CLUSTER`), and
+`GENMOD` (generalized linear models via statsmodels `GLM` — generalizes
+`REG` (Gaussian/identity) and `LOGISTIC` (Binomial/logit) to other
+exponential-family distributions with a configurable link: `MODEL y =
+x1 x2 ... / DIST=dist LINK=link;`, where `DIST=` is `NORMAL`/`GAUSSIAN`
+(the default when `DIST=` is omitted, matching real GENMOD),
+`POISSON`, `GAMMA`, or `BINOMIAL`/`BIN`, and `LINK=` is `IDENTITY`,
+`LOG`, or `LOGIT` — omitting `LINK=` uses each family's own canonical
+default link, matching both SAS's and statsmodels' default behavior;
+prints the fitted model summary via `model.summary()` like
+`REG`/`LOGISTIC`/`ARIMA`. Scope cuts: no `CLASS` statement (predictors
+are always coerced to numeric, unlike `GLM`/`LOGISTIC`'s dummy-encoding
+path), no `LINK=POWER(exponent)` (raises a compile error rather than
+guessing the exponent — `IDENTITY`/`LOG`/`LOGIT` are the only supported
+links), and no `OUTPUT OUT=` (GENMOD's `OUTPUT` statement has many
+`DIST=`-specific statistic keywords that are out of scope here;
+`GENMOD` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`/`ARIMA` without
+`FORECAST`).
 `MODEL y = x1 x2
-...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
+...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`, and
+`GENMOD`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -488,7 +506,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   time).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
