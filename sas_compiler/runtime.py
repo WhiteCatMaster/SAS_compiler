@@ -1672,6 +1672,50 @@ def proc_freq_measures(df: pd.DataFrame, v1: str, v2: str):
     return None
 
 
+def proc_freq_agree(df: pd.DataFrame, v1: str, v2: str):
+    """Print a PROC FREQ AGREE-style report of Cohen's Kappa (Simple Kappa
+    Coefficient) and overall percent agreement for a square two-way table
+    (v1 rows x v2 columns) where both variables represent the same set of
+    categories rated by two different raters/methods. Real SAS's AGREE
+    option is only meaningful for such a square, same-category table; a
+    table of any other shape prints a SAS-style warning instead of
+    computing a nonsensical statistic. As a documented scope cut, only the
+    Kappa point estimate and percent agreement are reported; the
+    asymptotic standard error and confidence interval that real SAS also
+    prints are omitted (they require statistical machinery beyond what
+    sklearn's cohen_kappa_score gives directly, and a hand-derived CI
+    formula risks being wrong). Returns None (real PROC FREQ's AGREE
+    option has no OUT= dataset for the Kappa statistic)."""
+    from sklearn.metrics import cohen_kappa_score
+
+    ct = pd.crosstab(df[v1], df[v2])
+    print("Simple Kappa Coefficient")
+    print()
+    if ct.shape[0] != ct.shape[1] or set(ct.index) != set(ct.columns):
+        print("WARNING: Table is not square over the same set of "
+              "categories on both variables; the kappa coefficient "
+              "cannot be computed.")
+        print()
+        return None
+
+    sub = df[[v1, v2]].dropna()
+    try:
+        kappa = float(cohen_kappa_score(sub[v1], sub[v2]))
+    except ValueError as e:
+        print(f"WARNING: Kappa coefficient could not be computed "
+              f"(degenerate table): {e}")
+        print()
+        return None
+
+    pct_agree = float((sub[v1] == sub[v2]).mean() * 100.0)
+
+    print("Statistic                       Value")
+    print(f"Kappa                          {kappa:>10.4f}")
+    print(f"Percent Agreement                {pct_agree:>8.1f}")
+    print()
+    return None
+
+
 def proc_freq_chisq_oneway(df: pd.DataFrame, var: str):
     """Print a PROC FREQ CHISQ-style Pearson chi-square goodness-of-fit
     report for a one-way table (var), testing the null hypothesis that
