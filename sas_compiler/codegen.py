@@ -1343,6 +1343,8 @@ class CodeGen:
             self._gen_proc_lifetest(proc)
         elif name == "genmod":
             self._gen_proc_genmod(proc)
+        elif name == "discrim":
+            self._gen_proc_discrim(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2369,6 +2371,56 @@ class CodeGen:
         self.w(f"_scored = _r.proc_princomp_fit(_df, {var_list!r}, n={n!r}, use_cov={cov!r}, std_scores={std!r})")
         if out:
             self._store_out(out_raw, out, "_scored")
+
+    def _gen_proc_discrim(self, proc: A.ProcStep):
+        """PROC DISCRIM (linear discriminant analysis / classification via
+        scikit-learn's LinearDiscriminantAnalysis). CLASS names the single
+        grouping/response variable (required -- real SAS DISCRIM also only
+        ever accepts one CLASS variable, so this isn't even a scope cut),
+        and VAR lists the predictors (required, mirroring
+        PROC RANK/FASTCLUS's exact "requires a VAR statement" pattern).
+
+        OUT= (PROC option or OUTPUT OUT=, handled the same dual-form way as
+        PROC FASTCLUS/PRINCOMP) gets the fit-subset rows augmented with a
+        predicted-class column (real SAS calls it `_INTO_`; used here for
+        fidelity) and one posterior-probability column per distinct class
+        level, named `prob_<level>` -- a documented naming choice of ours,
+        not an attempt to replicate SAS's own naming convention for these.
+
+        Like PROC FASTCLUS/PRINCOMP, the classification summary (resub-
+        stitution confusion matrix + accuracy) is always printed, whether
+        or not OUT= was given; only the returned/stored dataset is
+        conditional on OUT= being present.
+
+        Scope cuts (see runtime.proc_discrim_fit's docstring for the
+        runtime-side detail): resubstitution (apparent) error rate only --
+        no cross-validated error rate; no PRIORS=; no POOL=; no quadratic
+        discriminant analysis (METHOD=)."""
+        dsname = self._resolve_ds(proc)
+        class_clause = self._clause(proc, "class")
+        if not class_clause or len(class_clause) != 1:
+            raise CodegenError(
+                "PROC DISCRIM requires a CLASS statement with exactly one variable"
+            )
+        class_var = class_clause[0][0]
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC DISCRIM requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_classified = _r.proc_discrim_fit(_df, {class_var!r}, {var_list!r})")
+        if out:
+            self._store_out(out_raw, out, "_classified")
 
     def _gen_proc_cluster(self, proc: A.ProcStep):
         """Agglomerative/hierarchical clustering (scipy). Print-only, like

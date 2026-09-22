@@ -2707,6 +2707,84 @@ def proc_princomp_fit(df: pd.DataFrame, cols: list, n: int | None = None,
     return result
 
 
+def proc_discrim_fit(df: pd.DataFrame, class_var: str, var_names: list) -> pd.DataFrame:
+    """Linear discriminant analysis / classification (scikit-learn's
+    LinearDiscriminantAnalysis). `class_var` is the single grouping/
+    response variable (kept as-is and coerced to a string, mirroring how
+    PROC GLM/LOGISTIC's `_build_class_design_matrix` treats CLASS
+    predictors as categorical); `var_names` are the numeric predictors,
+    coerced with `pd.to_numeric` like PROC FASTCLUS/PRINCOMP. Rows with
+    any missing value among `var_names` or `class_var` are dropped before
+    fitting, mirroring proc_fastclus_fit's `.notna().all(axis=1)` masking
+    pattern extended to the class column.
+
+    Prints "The DISCRIM Procedure", a resubstitution classification
+    summary -- a confusion matrix (`pd.crosstab(actual, predicted)`, like
+    proc_freq_agree's crosstab-based reports elsewhere in this module) --
+    and the overall resubstitution (apparent) accuracy/error rate, i.e.
+    the fraction of the *training* data itself correctly classified by the
+    fitted model. This is real SAS DISCRIM's own default classification
+    summary shape; a cross-validated error rate is a documented scope cut.
+
+    Returns the fit-subset rows augmented with a predicted-class column
+    (`_INTO_`, matching real SAS's own name for it) and one posterior-
+    probability column per distinct class level (`prob_<level>`, sorted --
+    a naming convention of ours, not an attempt to replicate SAS's own).
+
+    Scope cuts: resubstitution error rate only (no cross-validation), no
+    PRIORS= (equal priors, scikit-learn's default), no POOL= (LDA always
+    pools/assumes a shared covariance matrix across classes -- that is
+    what makes it *linear* discriminant analysis), and no quadratic
+    discriminant analysis (real SAS's METHOD=; would be
+    QuadraticDiscriminantAnalysis instead)."""
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+    sub = df[var_names].apply(pd.to_numeric, errors="coerce")
+    sub[class_var] = df[class_var].astype(str)
+    mask = sub.notna().all(axis=1) & df[class_var].notna()
+    clean = sub[mask]
+
+    X = clean[var_names]
+    y = clean[class_var]
+
+    levels = sorted(y.unique())
+    if len(levels) < 2:
+        raise RuntimeError(
+            "PROC DISCRIM: the CLASS variable has fewer than 2 non-missing "
+            f"levels ({len(levels)}) -- discriminant analysis requires at "
+            "least 2 classes"
+        )
+    if len(clean) <= len(var_names):
+        raise RuntimeError(
+            f"PROC DISCRIM: too few complete observations ({len(clean)}) to "
+            f"fit a model with {len(var_names)} predictor(s)"
+        )
+
+    lda = LinearDiscriminantAnalysis()
+    lda.fit(X, y)
+    pred = lda.predict(X)
+    proba = lda.predict_proba(X)
+
+    print("The DISCRIM Procedure")
+    print()
+    print("Classification Summary (Resubstitution)")
+    ct = pd.crosstab(pd.Series(y.to_numpy(), name="Actual Class"),
+                      pd.Series(pred, name="Predicted Class"))
+    print(ct.to_string())
+    print()
+    accuracy = float((pred == y.to_numpy()).mean())
+    print(f"Resubstitution Accuracy: {accuracy:.4f}")
+    print(f"Resubstitution Error Rate: {1.0 - accuracy:.4f}")
+    print()
+
+    result = df.loc[mask].copy()
+    result["_INTO_"] = pred
+    # lda.classes_ is already sorted ascending (matches `levels` above).
+    for i, level in enumerate(lda.classes_):
+        result[f"prob_{level}"] = proba[:, i]
+    return result
+
+
 # SAS METHOD= name (lowercased) -> scipy.cluster.hierarchy.linkage method=
 # name. WARD and WARDS are both accepted spellings for scipy's "ward".
 _CLUSTER_METHODS = {
