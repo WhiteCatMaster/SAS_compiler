@@ -2151,6 +2151,56 @@ def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None
     return result
 
 
+def proc_phreg_fit(df: pd.DataFrame, time_var: str, censor_var: str,
+                    censor_value: float, xs: list):
+    """Fit a Cox proportional hazards regression (statsmodels' PHReg),
+    print its summary, and print a "Hazard Ratio Estimates" section
+    (mirroring PROC LOGISTIC's "Odds Ratio Estimates" block).
+
+    `censor_var` names the single value (`censor_value`) that marks a
+    censored observation; every other observed value of `censor_var`
+    is treated as an event. This is a scope cut from real SAS PHREG,
+    which allows a list of censor values. Print-only: there is no
+    OUTPUT OUT= (risk scores / residuals), STRATA, or time-dependent
+    covariate support."""
+    import math as _math
+    from statsmodels.duration.hazard_regression import PHReg
+
+    cols = [time_var, censor_var] + xs
+    sub = df[cols].copy()
+    sub[time_var] = pd.to_numeric(sub[time_var], errors="coerce")
+    for c in xs:
+        sub[c] = pd.to_numeric(sub[c], errors="coerce")
+    sub = sub.dropna()
+
+    if len(sub) <= len(xs):
+        raise RuntimeError(
+            f"PROC PHREG: too few complete observations ({len(sub)}) to fit "
+            f"a model with {len(xs)} predictor(s)"
+        )
+
+    # 1 = event occurred, 0 = censored -- matches statsmodels' PHReg
+    # `status` convention (verified against a synthetic-data smoke test).
+    status = (sub[censor_var] != censor_value).astype(int)
+    if status.nunique() < 2:
+        raise RuntimeError(
+            "PROC PHREG: the censoring indicator has no variation (all "
+            "observations are censored, or all are events) -- a Cox model "
+            "cannot be fit"
+        )
+
+    model = PHReg(sub[time_var], sub[xs], status=status).fit()
+    print(model.summary())
+    print()
+    print("Hazard Ratio Estimates")
+    # `model.params` is a plain ndarray (PHReg does not label it like
+    # sm.Logit's Series), so pair it positionally with `xs` -- the same
+    # column order passed to PHReg via `sub[xs]`.
+    for name, coef in zip(xs, model.params):
+        print(f"  {name}: {_math.exp(coef):.4f}")
+    return None
+
+
 # ---------------- LIBNAME / real database integration ----------------
 DB_LIBS: dict = {}
 
