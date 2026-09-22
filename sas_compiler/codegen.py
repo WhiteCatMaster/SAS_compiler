@@ -1,13 +1,14 @@
 """AST -> Python (pandas/duckdb) code generator."""
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import os
 import re
 
 from . import ast_nodes as A
 from . import runtime as _rt
-from .parser import normalize_dsname
+from .parser import normalize_dsname, Parser
 
 
 class CodegenError(Exception):
@@ -1355,6 +1356,8 @@ class CodeGen:
             self._gen_proc_timeseries(proc)
         elif name == "pls":
             self._gen_proc_pls(proc)
+        elif name == "nlin":
+            self._gen_proc_nlin(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2712,6 +2715,77 @@ class CodeGen:
         )
         if out:
             self._store_out(out_raw, out, "_decomp")
+
+    @staticmethod
+    def _collect_expr_vars(e: A.Expr) -> set:
+        """Walk an expression AST collecting every A.Var name it
+        references -- used by PROC NLIN to figure out which names in a
+        MODEL expression are x-variables (everything not a PARMS name)."""
+        names: set = set()
+        if isinstance(e, A.Var):
+            names.add(e.name)
+            return names
+        if dataclasses.is_dataclass(e):
+            for f in dataclasses.fields(e):
+                v = getattr(e, f.name)
+                if isinstance(v, A.Expr):
+                    names |= CodeGen._collect_expr_vars(v)
+                elif isinstance(v, (list, tuple)):
+                    for item in v:
+                        if isinstance(item, A.Expr):
+                            names |= CodeGen._collect_expr_vars(item)
+        return names
+
+    def _gen_proc_nlin(self, proc: A.ProcStep):
+        """PROC NLIN: nonlinear least-squares regression against an
+        arbitrary user-specified expression, e.g.
+        `model y = b0 * exp(b1 * x);`. Unlike every other MODEL-using PROC
+        here, NLIN's right-hand side is a genuine algebraic expression, not
+        a flat predictor list -- so it's parsed with this codebase's own
+        DATA-step expression parser/codegen (Parser.parse_expr() +
+        CodeGen.gen_expr()) instead of _parse_model_stmt, reusing the exact
+        same operator/function-call codegen (EXP, LOG, **, ...) every other
+        SAS expression already gets. PARMS declares the parameters to
+        estimate (with starting values); every other A.Var name found in
+        the parsed expression is treated as an x-variable pulled from the
+        data. Print-only (no OUTPUT OUT=, which has many derivative-/CI-
+        related keywords out of scope here)."""
+        dsname = self._resolve_ds(proc)
+        parms_clause = next((c[1] for c in proc.clauses if c[0] == "parms"), None)
+        if not parms_clause:
+            raise CodegenError("PROC NLIN requires a PARMS statement")
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC NLIN requires a MODEL statement")
+        m = re.match(r"^\s*([A-Za-z_]\w*)\s*=\s*(.+)$", model_raw, re.S)
+        if not m:
+            raise CodegenError(f"PROC NLIN: could not parse MODEL statement: {model_raw!r}")
+        y_name = m.group(1).lower()
+        rhs_text = m.group(2)
+        try:
+            expr = Parser(rhs_text).parse_expr()
+        except Exception as e:
+            raise CodegenError(
+                f"PROC NLIN: could not parse MODEL expression {rhs_text!r}: {e}"
+            ) from e
+
+        parm_names = [p for p, _ in parms_clause]
+        start_values = [v for _, v in parms_clause]
+        referenced = self._collect_expr_vars(expr)
+        x_names = sorted(v for v in referenced if v not in parm_names)
+
+        expr_code = self.gen_expr(expr, varmap="_p")
+        self.w("def _nlin_model(_p):")
+        self.indent += 1
+        self.w(f"return {expr_code}")
+        self.indent -= 1
+
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_r.proc_nlin_fit(_df, {y_name!r}, {parm_names!r}, {start_values!r}, "
+            f"{x_names!r}, _nlin_model)"
+        )
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
