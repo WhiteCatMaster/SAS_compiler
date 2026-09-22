@@ -3135,6 +3135,94 @@ def proc_discrim_fit(df: pd.DataFrame, class_var: str, var_names: list) -> pd.Da
     return result
 
 
+def proc_hpsplit_fit(df: pd.DataFrame, class_var: str, var_names: list,
+                      max_depth: int | None = None) -> pd.DataFrame:
+    """PROC HPSPLIT (decision tree classification via scikit-learn's
+    DecisionTreeClassifier). Structurally close to proc_discrim_fit:
+    `class_var` is the single required categorical response (coerced to a
+    string, like PROC DISCRIM's CLASS variable); `var_names` are the
+    numeric predictors, coerced with `pd.to_numeric` and treated as plain
+    numeric only -- no dummy-encoding of categorical predictors (matching
+    PROC REG's plain-numeric baseline, a deliberate scope cut versus
+    GLM/LOGISTIC's CLASS-driven predictor dummy-encoding; trees split
+    numeric thresholds natively so this isn't a real limitation). Rows
+    with any missing value among `var_names` or `class_var` are dropped
+    before fitting, same masking pattern as proc_discrim_fit.
+
+    `max_depth`: None (MAXDEPTH= omitted) passes straight through to
+    scikit-learn's own default (unlimited depth), matching real SAS
+    HPSPLIT's own default of unlimited depth up to its stopping criteria.
+
+    Prints "The HPSPLIT Procedure", the same resubstitution classification
+    summary shape as proc_discrim_fit (a confusion matrix via
+    `pd.crosstab(actual, predicted)` plus overall resubstitution
+    accuracy/error rate), and a feature-importance table
+    (`model.feature_importances_`, one row per predictor) -- HPSPLIT's
+    most useful summary output in practice, pairing naturally with the
+    tree-fitting approach.
+
+    Returns the fit-subset rows augmented with a predicted-class column
+    (`_INTO_`, mirroring PROC DISCRIM's naming choice for the same kind
+    of column -- not necessarily real SAS HPSPLIT's own output variable
+    naming).
+
+    Scope cuts: classification only (a CLASS statement is required; real
+    SAS HPSPLIT also supports regression trees when the target isn't a
+    CLASS variable, out of scope here), resubstitution error rate only
+    (no cross-validated pruning / PRUNE=, matching PROC DISCRIM's own
+    scope cut), MAXDEPTH= is the only supported tuning option (no
+    MAXBRANCH=, MINLEAFSIZE=, SPLITCRIT=, ...), no CODE=/RULES= scoring-
+    code export, and no tree-plot/ODS graphics output."""
+    from sklearn.tree import DecisionTreeClassifier
+
+    sub = df[var_names].apply(pd.to_numeric, errors="coerce")
+    sub[class_var] = df[class_var].astype(str)
+    mask = sub.notna().all(axis=1) & df[class_var].notna()
+    clean = sub[mask]
+
+    X = clean[var_names]
+    y = clean[class_var]
+
+    levels = sorted(y.unique())
+    if len(levels) < 2:
+        raise RuntimeError(
+            "PROC HPSPLIT: the CLASS variable has fewer than 2 non-missing "
+            f"levels ({len(levels)}) -- classification requires at least "
+            "2 classes"
+        )
+    if len(clean) == 0:
+        raise RuntimeError(
+            "PROC HPSPLIT: no complete observations to fit a model"
+        )
+
+    tree = DecisionTreeClassifier(max_depth=max_depth, random_state=0)
+    tree.fit(X, y)
+    pred = tree.predict(X)
+
+    print("The HPSPLIT Procedure")
+    print()
+    print("Classification Summary (Resubstitution)")
+    ct = pd.crosstab(pd.Series(y.to_numpy(), name="Actual Class"),
+                      pd.Series(pred, name="Predicted Class"))
+    print(ct.to_string())
+    print()
+    accuracy = float((pred == y.to_numpy()).mean())
+    print(f"Resubstitution Accuracy: {accuracy:.4f}")
+    print(f"Resubstitution Error Rate: {1.0 - accuracy:.4f}")
+    print()
+    print("Variable Importance")
+    imp = pd.DataFrame({
+        "Variable": var_names,
+        "Importance": tree.feature_importances_,
+    }).sort_values("Importance", ascending=False).reset_index(drop=True)
+    print(imp.to_string(index=False))
+    print()
+
+    result = df.loc[mask].copy()
+    result["_INTO_"] = pred
+    return result
+
+
 # SAS METHOD= name (lowercased) -> scipy.cluster.hierarchy.linkage method=
 # name. WARD and WARDS are both accepted spellings for scipy's "ward".
 _CLUSTER_METHODS = {

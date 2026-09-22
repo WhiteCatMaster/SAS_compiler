@@ -395,7 +395,38 @@ own default output shape, whether or not `OUT=` is given. Scope cuts: no
 cross-validated error rate (resubstitution/apparent error rate only), no
 `PRIORS=` (equal priors, scikit-learn's default), no `POOL=` (LDA always
 pools covariance across classes), and no quadratic discriminant analysis
-(real SAS's `METHOD=` option)), and
+(real SAS's `METHOD=` option)),
+`HPSPLIT` (decision tree classification via scikit-learn's
+`DecisionTreeClassifier` — `CLASS target;` names the single categorical
+response variable (required, mirroring `DISCRIM`'s `CLASS groupvar;`
+requirement) and the shared `MODEL target = x1 x2 ...;` syntax (like
+`REG`/`GLM`/`PLS`, not a bare `VAR` list — real SAS `HPSPLIT` uses
+`MODEL`) names the response again on its left-hand side, which must
+match the `CLASS` variable, plus the plain-numeric predictors on its
+right-hand side (no `CLASS`-driven dummy-encoding of predictors,
+matching `REG`'s plain-numeric baseline — trees split numeric thresholds
+natively so this isn't a real limitation). A `MAXDEPTH=n`
+PROC-statement option sets the fitted tree's max depth (real SAS
+`HPSPLIT`'s own most commonly used tuning option); omitted, it defaults
+to scikit-learn's own unlimited depth, matching real SAS `HPSPLIT`'s own
+default. Always prints "The HPSPLIT Procedure" with the same
+resubstitution classification summary shape as `DISCRIM` (confusion
+matrix plus resubstitution accuracy/error rate) plus a Variable
+Importance table (`feature_importances_`, one row per predictor).
+`OUTPUT OUT=`/`OUT=` (same dual-form handling as `DISCRIM`) returns the
+fit-subset rows augmented with a predicted-class column named `_INTO_`
+— mirroring `DISCRIM`'s own naming choice for the same kind of column,
+not necessarily real SAS `HPSPLIT`'s own output variable naming. Scope
+cuts: classification only (a `CLASS` statement is required — real SAS
+`HPSPLIT` also supports regression trees when the target isn't a
+`CLASS` variable, out of scope here; omitting `CLASS` raises a clear
+compile error rather than silently doing something else);
+resubstitution error rate only, no cross-validated pruning / `PRUNE=`
+(matching `DISCRIM`'s own scope cut); `MAXDEPTH=` is the only supported
+tuning option (no `MAXBRANCH=`, `MINLEAFSIZE=`, `SPLITCRIT=`, ...); no
+`CODE=`/`RULES=` scoring-code export; no tree-plot/ODS graphics output
+(this compiler's `SGPLOT`-based plotting infrastructure is a separate
+feature, out of scope for this integration)), and
 `ROBUSTREG` (robust linear regression via statsmodels
 `RLM` — structurally identical to `REG`, swapping ordinary least
 squares for M-estimation with Huber's T norm, so a handful of gross
@@ -496,8 +527,9 @@ statement has many derivative-/confidence-interval-related keywords out
 of scope here) — `NLIN` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
-`GENMOD`, `ROBUSTREG`, `QUANTREG`, `MIXED`, and `PLS` (`NLIN` uses its
-own `MODEL y = <expr>;` shape, described above, not this shared one).
+`GENMOD`, `ROBUSTREG`, `QUANTREG`, `MIXED`, `PLS`, and `HPSPLIT` (`NLIN`
+uses its own `MODEL y = <expr>;` shape, described above, not this shared
+one).
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -665,7 +697,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/
-  `TIMESERIES`/`PLS`/`NLIN`/`CANCORR`/`QUANTREG` raise a clear
+  `TIMESERIES`/`PLS`/`NLIN`/`CANCORR`/`QUANTREG`/`HPSPLIT` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
