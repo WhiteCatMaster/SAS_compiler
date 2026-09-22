@@ -2857,6 +2857,101 @@ def proc_factor_fit(df: pd.DataFrame, cols: list, n: int | None = None) -> pd.Da
     return result
 
 
+def proc_pls_fit(df: pd.DataFrame, y: str, xs: list, nfac: int | None = None) -> pd.DataFrame:
+    """Partial least squares regression (scikit-learn's PLSRegression).
+    Structurally a regression method (a required response `y`, unlike
+    PROC PRINCOMP/FACTOR's VAR-only predictor list), but mirrors
+    proc_princomp_fit's shape closely: `y`/`xs` columns are coerced
+    numeric, rows with any missing value among them are dropped, and the
+    remaining data is standardized with the sample (ddof=1) std before
+    fitting -- PLS, like PCA/FactorAnalysis here, is sensitive to variable
+    scaling, so this reuses PRINCOMP's same standardization rationale.
+    Unlike PRINCOMP's eigenvalue-based ddof=1 exactness argument, ddof
+    choice isn't load-bearing here (PLSRegression doesn't derive an
+    internal covariance estimate from it) -- ddof=1 is used only for
+    consistency with the rest of the codebase.
+
+    NFAC=: when None (omitted), defaults to min(2, len(xs)) (clamped to at
+    least 1) -- real SAS PLS instead defaults to a cross-validation-
+    selected number of factors, which is out of scope here; an explicit
+    `nfac` is used directly.
+
+    Prints "The PLS Procedure", an "X Loadings" table (PLSRegression's
+    x_weights_, one row per predictor, one column per component, the same
+    print shape as PROC PRINCOMP's Eigenvectors table, reusing that print
+    styling) and the training-data R-squared of predicted vs. actual `y`
+    (sklearn.metrics.r2_score), matching the spirit of how PROC REG's
+    summary reports R-squared.
+
+    Returns the fit-subset rows augmented with a `Predicted` column (the
+    fitted response, back-transformed to `y`'s original scale) and
+    1-based Factor1..FactorN score columns -- a documented naming choice
+    of ours, not an attempt to replicate SAS PLS's own OUTPUT statement
+    column names."""
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.metrics import r2_score
+
+    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+
+    if nfac is None:
+        nfac = max(1, min(2, len(xs)))
+    if nfac < 1:
+        raise RuntimeError(f"PROC PLS: NFAC={nfac} must be at least 1")
+    if nfac > len(xs):
+        raise RuntimeError(
+            f"PROC PLS: NFAC={nfac} exceeds the number of predictor "
+            f"variables ({len(xs)})"
+        )
+    if len(clean) < 2:
+        raise RuntimeError(
+            f"PROC PLS: too few complete observations ({len(clean)}) to "
+            "fit a model"
+        )
+    if len(clean) <= nfac:
+        raise RuntimeError(
+            f"PROC PLS: too few complete observations ({len(clean)}) to "
+            f"fit a model with NFAC={nfac}"
+        )
+
+    # Standardize with the sample (ddof=1) std, matching proc_princomp_fit's
+    # correlation-based default (not load-bearing here, kept for
+    # consistency -- see docstring).
+    x_mean, x_std = clean[xs].mean(), clean[xs].std(ddof=1)
+    y_mean, y_std = clean[y].mean(), clean[y].std(ddof=1)
+    X_fit = ((clean[xs] - x_mean) / x_std).to_numpy()
+    y_fit = ((clean[y] - y_mean) / y_std).to_numpy()
+
+    pls = PLSRegression(n_components=nfac)
+    pls.fit(X_fit, y_fit)
+    scores = pls.transform(X_fit)
+    n_comp = scores.shape[1]
+
+    y_pred_std = pls.predict(X_fit).ravel()
+    y_pred = y_pred_std * y_std + y_mean
+
+    print("The PLS Procedure")
+    print("X Loadings")
+    loadings_table = pd.DataFrame(
+        pls.x_weights_,
+        index=xs,
+        columns=[f"Factor{i + 1}" for i in range(n_comp)],
+    )
+    print(loadings_table.to_string())
+    print()
+
+    r2 = r2_score(clean[y].to_numpy(), y_pred)
+    print(f"Model R-Square: {r2:.4f}")
+    print()
+
+    result = df.loc[mask].copy()
+    result["Predicted"] = y_pred
+    for i in range(n_comp):
+        result[f"Factor{i + 1}"] = scores[:, i]
+    return result
+
+
 def proc_discrim_fit(df: pd.DataFrame, class_var: str, var_names: list) -> pd.DataFrame:
     """Linear discriminant analysis / classification (scikit-learn's
     LinearDiscriminantAnalysis). `class_var` is the single grouping/

@@ -423,10 +423,29 @@ primary purpose) — only an already-regular series is supported; no
 `CORR`/`SPECTRA`/`SEASON`/`TREND` statements; no `OUTDECOMP=`-precise
 column layout (see above). Decomposition defaults to additive (the
 simpler, more broadly-applicable choice), with a `MODEL=multiplicative`
-PROC-statement option to switch to multiplicative decomposition).
+PROC-statement option to switch to multiplicative decomposition), and
+`PLS` (partial least squares regression via scikit-learn's
+`PLSRegression` — structurally a regression method like `REG`, so the
+shared `MODEL y = x1 x2 ...;` syntax is required, but its report/`OUT=`
+shape mirrors `PRINCOMP`: `X`/`y` are standardized the same
+sample-std (`ddof=1`) way `PRINCOMP`/`FACTOR` do before fitting — PLS is
+sensitive to variable scaling, same rationale — and a `NFAC=n`
+PROC-statement option picks the number of PLS components/factors,
+defaulting to `min(2, len(x variables))` (our own simple default; real
+SAS PLS instead defaults to a cross-validation-selected number of
+factors, which is out of scope here). Prints "The PLS Procedure" with
+an "X Loadings" table (`PLSRegression.x_weights_`, one row per predictor,
+one column per component, reusing `PRINCOMP`'s Eigenvectors print
+styling) and the training-data R-Square of predicted vs. actual `y`
+(`sklearn.metrics.r2_score`), in the spirit of how `REG` reports R².
+`OUTPUT OUT=`/`OUT=` (same dual-form handling as `PRINCOMP`) gets the
+fit-subset rows (missing `y`/`x` values dropped) augmented with a
+`Predicted` column (the fitted response) and 1-based `Factor1..FactorN`
+score columns — documented naming choices of ours, not an attempt to
+reproduce SAS PLS's own `OUTPUT` statement column names).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
-`GENMOD`, `ROBUSTREG`, and `MIXED`.
+`GENMOD`, `ROBUSTREG`, `MIXED`, and `PLS`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -593,7 +612,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/`TIMESERIES` raise a clear
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/`TIMESERIES`/`PLS` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
