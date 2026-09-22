@@ -366,10 +366,25 @@ outliers in `y` get down-weighted instead of dominating the fit; same
 `S`, ...) — only `METHOD=M` (also real SAS's own default) is
 implemented, and an explicit `MODEL ... / METHOD=other;` raises a
 compile error rather than being approximated; no `VIF`/`SELECTION=`
-like `REG`'s newer options).
+like `REG`'s newer options), and
+`MIXED` (linear mixed-effects models via statsmodels
+`MixedLM` — scoped down hard to a single random-intercept model: the
+shared `MODEL y = x1 x2 ...;` syntax for the fixed effects (plain
+numeric predictors, no `CLASS`-driven dummy-encoding — matching `REG`'s
+plain-numeric baseline rather than `GLM`/`LOGISTIC`'s `CLASS` support)
+plus exactly one `RANDOM INTERCEPT / SUBJECT=subjectvar;` statement
+naming the random-intercept grouping variable; prints the statsmodels
+summary (fixed-effect coefficient table plus the `Group Var` random-
+intercept variance component) via `model.summary()` like
+`REG`/`LOGISTIC`/`GENMOD`. Scope cuts: no random slopes, no multiple
+`RANDOM` statements (a `RANDOM` naming anything other than bare
+`INTERCEPT` is rejected with a compile error rather than being
+mishandled), no `REPEATED` statement/covariance structures, no `CLASS`,
+and no `OUTPUT OUT=`/`LSMEANS` — `MIXED` is print-only, like
+`TTEST`/`ANOVA`/`CLUSTER`/`GENMOD`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
-`GENMOD`, and `ROBUSTREG`.
+`GENMOD`, `ROBUSTREG`, and `MIXED`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -536,7 +551,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM` raise a clear
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
