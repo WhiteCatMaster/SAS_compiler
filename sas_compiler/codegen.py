@@ -2756,7 +2756,11 @@ class CodeGen:
             self.w("print(_pf.to_string())")
 
     # ---- PROC TABULATE ----
-    _TABULATE_STATS = {"sum": "sum", "mean": "mean", "n": "count"}
+    _TABULATE_STATS = {
+        "sum": "sum", "mean": "mean", "n": "count",
+        "min": "min", "max": "max", "std": "std", "var": "var", "median": "median",
+        "pctsum": "sum",
+    }
 
     @classmethod
     def _split_tabulate_axis(cls, text: str) -> list:
@@ -2845,6 +2849,8 @@ class CodeGen:
                 f"index={row_classes!r} or None, columns={col_classes!r} or None, "
                 f"aggfunc={aggfunc!r})"
             )
+            if stat == "pctsum":
+                self.w(f"_piv = _piv * (100.0 / _df[{analysis_var!r}].sum())")
             self.w("_piv.columns.name = None")
             self.w("print(_piv.to_string())")
             self.w(f"_t = _piv.reset_index(); _t['_stat_'] = {stat!r}; _tab_outs.append(_t)")

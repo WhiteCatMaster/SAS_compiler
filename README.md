@@ -153,9 +153,14 @@ both defined, else a plain listing of the `COLUMN` variables — plus
 `COMPUTE`/`ENDCOMP` row blocks and
 `BREAK`/`RBREAK ... / SUMMARIZE` subtotal/total rows),
 `TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via
-`SUM`/`MEAN`/`N` in either `var*stat` or `stat*var` order, multi-stat
-`var*(sum mean)` cells, with an
-optional `OUT=` stacked with a `_stat_` column), `SGPLOT` (`SCATTER`,
+`SUM`/`MEAN`/`N`/`MIN`/`MAX`/`STD`/`VAR`/`MEDIAN`/`PCTSUM` in either
+`var*stat` or `stat*var` order, multi-stat `var*(sum mean min max std
+var median pctsum)` cells, with an optional `OUT=` stacked with a
+`_stat_` column; `PCTSUM` is percentage-of-grand-total only — each
+cell's sum divided by the overall sum of the analysis variable, times
+100 — the `PCTSUM<ROW>`/`PCTSUM<COL>` row/column-scoped forms from real
+SAS TABULATE are not implemented, nor are `PCTN`/`NMISS`/`RANGE`/`CV`/
+percentile statistics), `SGPLOT` (`SCATTER`,
 `SERIES`, `VBAR`/`HBAR` with or without `RESPONSE=`, `HISTOGRAM`,
 `DENSITY`, `REFLINE` — multiple
 plot statements overlay onto one figure; saved to a PNG via

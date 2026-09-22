@@ -1,3 +1,6 @@
+import pandas as pd
+import pytest
+
 from sas_compiler.macro import MacroProcessor
 from sas_compiler.parser import parse
 from sas_compiler.codegen import generate
@@ -164,3 +167,75 @@ def test_proc_tabulate_requires_table_statement():
     """
     with pytest.raises(CodegenError):
         run_sas(src)
+
+
+def test_proc_tabulate_multi_stat_min_max_median(capsys):
+    # region amounts: East = 100, 150, 200 -> min 100, max 200, median 150
+    #                 West = 300, 400, 100 -> min 100, max 400, median 300
+    src = SALES_DATA + """
+    proc tabulate data=sales;
+      class region;
+      var amount;
+      table region, amount*(min max median);
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "--- MIN ---" in out
+    assert "--- MAX ---" in out
+    assert "--- MEDIAN ---" in out
+    # East
+    assert "100" in out
+    assert "150" in out
+    assert "200" in out
+    # West
+    assert "300" in out
+    assert "400" in out
+
+
+def test_proc_tabulate_std_var_out_dataset():
+    src = SALES_DATA + """
+    proc tabulate data=sales out=stdtab;
+      class region;
+      var amount;
+      table region, amount*(std var);
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["stdtab"]
+
+    # cross-check against pandas' own groupby std/var on the same raw data
+    raw = pd.DataFrame(
+        {
+            "region": ["East", "East", "East", "West", "West", "West"],
+            "amount": [100, 150, 200, 300, 400, 100],
+        }
+    )
+    expected_std = raw.groupby("region")["amount"].std()
+    expected_var = raw.groupby("region")["amount"].var()
+
+    std_rows = df[df["_stat_"] == "std"].set_index("region")
+    var_rows = df[df["_stat_"] == "var"].set_index("region")
+    assert std_rows.loc["East", "amount"] == pytest.approx(expected_std["East"])
+    assert std_rows.loc["West", "amount"] == pytest.approx(expected_std["West"])
+    assert var_rows.loc["East", "amount"] == pytest.approx(expected_var["East"])
+    assert var_rows.loc["West", "amount"] == pytest.approx(expected_var["West"])
+
+
+def test_proc_tabulate_pctsum_grand_total(capsys):
+    # East sum=450, West sum=800, grand total=1250 -> East=36%, West=64%
+    src = SALES_DATA + """
+    proc tabulate data=sales out=pcttab;
+      class region;
+      var amount;
+      table region, amount*pctsum;
+    run;
+    """
+    ds = run_sas(src)
+    out = capsys.readouterr().out
+    assert "--- PCTSUM ---" in out
+    df = ds["pcttab"].set_index("region")
+    assert df.loc["East", "amount"] == pytest.approx(36.0)
+    assert df.loc["West", "amount"] == pytest.approx(64.0)
+    # structural correctness: percentages across all cells sum to ~100
+    assert df["amount"].sum() == pytest.approx(100.0)
