@@ -338,10 +338,19 @@ guessing the exponent — `IDENTITY`/`LOG`/`LOGIT` are the only supported
 links), and no `OUTPUT OUT=` (GENMOD's `OUTPUT` statement has many
 `DIST=`-specific statistic keywords that are out of scope here;
 `GENMOD` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`/`ARIMA` without
-`FORECAST`).
+`FORECAST`), and `ROBUSTREG` (robust linear regression via statsmodels
+`RLM` — structurally identical to `REG`, swapping ordinary least
+squares for M-estimation with Huber's T norm, so a handful of gross
+outliers in `y` get down-weighted instead of dominating the fit; same
+`OUTPUT OUT= P=/R=` support as `REG`/`GLM`. Scope cut: real SAS
+`ROBUSTREG` supports several `METHOD=` estimators (`M`, `MM`, `LTS`,
+`S`, ...) — only `METHOD=M` (also real SAS's own default) is
+implemented, and an explicit `MODEL ... / METHOD=other;` raises a
+compile error rather than being approximated; no `VIF`/`SELECTION=`
+like `REG`'s newer options).
 `MODEL y = x1 x2
-...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`, and
-`GENMOD`.
+...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
+`GENMOD`, and `ROBUSTREG`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -506,7 +515,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   time).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
-  `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
+  `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently

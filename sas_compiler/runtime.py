@@ -2084,6 +2084,31 @@ def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = No
     return result
 
 
+def proc_robustreg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
+    """Fit a robust linear regression (statsmodels RLM, M-estimation with
+    Huber's T norm), print its summary, and optionally return the input
+    rows augmented with predicted/residual columns per `out_stats` (e.g.
+    {'p': ['pred'], 'r': ['resid']}) -- mirrors proc_reg_fit exactly,
+    swapping sm.OLS for sm.RLM with a robust norm so outliers in `y` get
+    down-weighted instead of dominating the fit."""
+    import statsmodels.api as sm
+
+    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
+
+    X = sm.add_constant(sub[xs])
+    model = sm.RLM(sub[y], X, M=sm.robust.norms.HuberT()).fit()
+
+    print(model.summary())
+    if not out_stats:
+        return None
+    result = df.loc[sub.index].copy()
+    for name in out_stats.get("p", []):
+        result[name] = model.predict(X)
+    for name in out_stats.get("r", []):
+        result[name] = model.resid
+    return result
+
+
 def _build_class_design_matrix(df: pd.DataFrame, y: str, xs: list, class_vars: list | None):
     """Shared by PROC GLM and PROC LOGISTIC: build a design matrix where
     predictors named in `class_vars` are dummy-encoded (drop_first) as
