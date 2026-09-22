@@ -1567,6 +1567,17 @@ class Parser:
                                   old_raw, new_raw))
                 clauses.append(("change", pairs))
                 self.skip_to_semi()
+            elif ckw == "paired":
+                self.advance()
+                pairs = []
+                while self.peek().type == TokType.IDENT:
+                    v1 = self.advance().value.lower()
+                    if self.peek().type == TokType.OP and self.peek().value == "*":
+                        self.advance()
+                    v2 = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
+                    pairs.append((v1, v2))
+                clauses.append(("paired", pairs))
+                self.skip_to_semi()
             elif ckw in ("var", "by", "class", "id", "freq", "with"):
                 self.advance()
                 names = []
