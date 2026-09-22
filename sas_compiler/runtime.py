@@ -1166,13 +1166,79 @@ def read_infile(path, varspec, dlm=None, dsd=False, firstobs=1, obs=None):
     return rows
 
 
+_INFORMAT_MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _informat_2digit_year(year: int) -> int:
+    """2-digit year windowing for column-input date informats. Matches the
+    convention the 'ddMONyy'd date-literal parser already uses elsewhere in
+    this codebase (pivot at 26): 00-25 -> 20xx, 26-99 -> 19xx."""
+    return year + (2000 if year < 26 else 1900)
+
+
+def _parse_informat_date(text: str):
+    """DATE9.-style value ('01JAN2020', '01-JAN-2020', '01/JAN/2020') ->
+    SAS date serial, or None if it doesn't parse."""
+    m = re.match(r"^(\d{1,2})[-/]?([A-Za-z]{3})[-/]?(\d{2,4})$", text.strip())
+    if not m:
+        return None
+    mon = _INFORMAT_MONTH_ABBR.get(m.group(2).lower())
+    if mon is None:
+        return None
+    day, year = int(m.group(1)), int(m.group(3))
+    if year < 100:
+        year = _informat_2digit_year(year)
+    v = sas_date(year, mon, day)
+    return None if is_missing(v) else v
+
+
+def _parse_informat_mmddyy(text: str):
+    """MMDDYYw.-style value ('01/15/2020', '01152020', '01/15/20') -> SAS
+    date serial, or None if it doesn't parse."""
+    m = re.match(r"^(\d{2})[-/]?(\d{2})[-/]?(\d{2}|\d{4})$", text.strip())
+    if not m:
+        return None
+    mo, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if year < 100:
+        year = _informat_2digit_year(year)
+    v = sas_date(year, mo, day)
+    return None if is_missing(v) else v
+
+
+def _parse_informat_yymmdd(text: str):
+    """YYMMDDw.-style value ('2020-01-15', '20200115') -> SAS date serial,
+    or None if it doesn't parse."""
+    m = re.match(r"^(\d{4})[-/]?(\d{2})[-/]?(\d{2})$", text.strip())
+    if not m:
+        return None
+    year, mo, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    v = sas_date(year, mo, day)
+    return None if is_missing(v) else v
+
+
+def _parse_informat_comma(text: str):
+    """COMMAw.d/DOLLARw.d-style value ('1,234.56', '$1,234.56') -> float,
+    or None if it doesn't parse."""
+    cleaned = text.strip().replace("$", "").replace(",", "").strip()
+    if cleaned == "":
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
 def read_infile_columns(path, items, firstobs=1, obs=None):
     """Read a raw text file for INFILE + INPUT using column/pointer-controlled
     (formatted) input: @n, +n, /, #n, column ranges (start-end) and width
-    informats (w. / w.d).
+    informats (w. / w.d), plus a small set of named informats (DATE9.,
+    MMDDYYw., YYMMDDw., COMMAw.d, DOLLARw.d).
 
     items: list of tagged tuples produced by the parser --
-      ("var", name, is_char, width, decimals, start, end)
+      ("var", name, is_char, width, decimals, start, end, informat)
       ("ptr_abs", n) / ("ptr_rel", n) / ("newline",) / ("line_abs", n)
 
     Unlike list input, blank physical lines are kept (a blank line is a
@@ -1230,7 +1296,7 @@ def read_infile_columns(path, items, firstobs=1, obs=None):
                 cur = max(line_idx + int(item[1]) - 1, 0)
                 max_cur = max(max_cur, cur)
             elif tag == "var":
-                _, name, is_char, width, decimals, start, end = item
+                _, name, is_char, width, decimals, start, end, informat = item
                 line = get_line(cur)
                 if start is not None and end is not None:
                     raw = line[start - 1 : end]
@@ -1243,7 +1309,22 @@ def read_infile_columns(path, items, firstobs=1, obs=None):
                     col = len(line)
                 if is_char:
                     row[name] = raw.rstrip()
+                elif informat == "date":
+                    v = _parse_informat_date(raw)
+                    row[name] = MISSING if v is None else v
+                elif informat == "mmddyy":
+                    v = _parse_informat_mmddyy(raw)
+                    row[name] = MISSING if v is None else v
+                elif informat == "yymmdd":
+                    v = _parse_informat_yymmdd(raw)
+                    row[name] = MISSING if v is None else v
+                elif informat in ("comma", "dollar"):
+                    v = _parse_informat_comma(raw)
+                    row[name] = MISSING if v is None else v
                 else:
+                    # Plain numeric width informat, and the fallback for any
+                    # named informat outside the small set above (an
+                    # explicit, documented scope cut -- see README).
                     text = raw.strip()
                     try:
                         val = float(text)

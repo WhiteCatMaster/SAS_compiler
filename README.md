@@ -317,11 +317,23 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `var start-end` (numeric) / `var $ start-end` (character) column ranges,
   and width informats (`var w.` / `var $w.`, with an accepted `.d` decimal
   suffix that applies implied-decimal scaling when the field text has no
-  literal `.`). A bare `#n` leaves the column pointer wherever it was
-  (matching real SAS -- only `/` and a fresh INPUT statement reset it to
-  column 1). One file per DATA step; short lines are padded MISSOVER-style
-  (no FLOWOVER); no `@` trailing-column-pointer line hold, no other
-  informat families beyond numeric/character width. **FILE** is a real
+  literal `.`), plus a small set of named informats: `DATE9.` (and other
+  `DATEw.` widths -- the day/MMM/year text is parsed regardless of the
+  declared width), `MMDDYYw.`, `YYMMDDw.`, `COMMAw.d`, and `DOLLARw.d`
+  (`COMMA`/`DOLLAR` strip `,`/`$`/whitespace before converting to a
+  number). `DATE9.`/`MMDDYYw.`/`YYMMDDw.` tolerate `-`/`/` separators
+  between date parts as well as none (`01JAN2020`, `01-JAN-2020`,
+  `01/15/2020`, `20200115`) and convert into the same SAS date serial a
+  `'ddMONyyyy'd` date literal would produce. A 2-digit year is windowed
+  with a pivot at 26 (`00`-`25` -> `20xx`, `26`-`99` -> `19xx`), matching
+  the date-literal parser's convention elsewhere in this codebase. Any
+  other named informat (e.g. `TIME8.`, `DATETIMEw.`, custom informats)
+  falls back to plain numeric parsing (`float(text)`, else missing) rather
+  than being recognized -- an explicit scope cut. A bare `#n` leaves the
+  column pointer wherever it was (matching real SAS -- only `/` and a
+  fresh INPUT statement reset it to column 1). One file per DATA step;
+  short lines are padded MISSOVER-style (no FLOWOVER); no `@`
+  trailing-column-pointer line hold. **FILE** is a real
   runtime statement, matching SAS: it switches the current `PUT`
   destination at the point it executes, so a DATA step can write to
   several output files -- every `PUT` after a `FILE` statement (until the

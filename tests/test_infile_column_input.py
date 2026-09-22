@@ -1,5 +1,5 @@
 from sas_compiler.macro import MacroProcessor
-from sas_compiler.parser import parse
+from sas_compiler.parser import parse, parse_sas_date_literal
 from sas_compiler.codegen import generate
 
 
@@ -177,3 +177,94 @@ def test_infile_width_informat_with_decimals(tmp_path):
     df = ds["out"]
     # No literal '.' in the raw text -> implied 2 decimals scaling.
     assert list(df["amt"]) == [123.45, 678.90]
+
+
+def test_infile_date9_informat(tmp_path):
+    """A named informat (DATE9.) must parse into the same SAS date serial
+    a '01JAN2020'd date literal would produce, not a bogus float()/MISSING
+    value from the plain-numeric path."""
+    p = tmp_path / "date9.txt"
+    p.write_text("01JAN2020\n15FEB2021\n")
+    src = f"""
+    data out;
+      infile "{p}";
+      input dt date9.;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["out"]
+    assert list(df["dt"]) == [
+        parse_sas_date_literal("01JAN2020"),
+        parse_sas_date_literal("15FEB2021"),
+    ]
+
+
+def test_infile_mmddyy_informat(tmp_path):
+    p = tmp_path / "mmddyy.txt"
+    p.write_text("01/15/2020\n12/31/2021\n")
+    src = f"""
+    data out;
+      infile "{p}";
+      input dt mmddyy10.;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["out"]
+    assert list(df["dt"]) == [
+        parse_sas_date_literal("15JAN2020"),
+        parse_sas_date_literal("31DEC2021"),
+    ]
+
+
+def test_infile_yymmdd_informat(tmp_path):
+    p = tmp_path / "yymmdd.txt"
+    p.write_text("2020-01-15\n2021-12-31\n")
+    src = f"""
+    data out;
+      infile "{p}";
+      input dt yymmdd10.;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["out"]
+    assert list(df["dt"]) == [
+        parse_sas_date_literal("15JAN2020"),
+        parse_sas_date_literal("31DEC2021"),
+    ]
+
+
+def test_infile_comma_informat_with_embedded_commas(tmp_path):
+    p = tmp_path / "comma.txt"
+    p.write_text("1,234.56\n$9,876.50\n")
+    src = f"""
+    data out;
+      infile "{p}";
+      input amt comma9.2;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["out"]
+    assert list(df["amt"]) == [1234.56, 9876.50]
+
+
+def test_infile_named_informat_does_not_misparse_following_vars(tmp_path):
+    """Regression test for the DATE9. misparse: before this fix, `dt`
+    would be read correctly but `date9` (the informat name itself) would
+    then be consumed as a bogus second variable, shifting every
+    subsequently-declared variable's column reads. This pins down that
+    `input dt date9. amt comma8.2 mdy mmddyy10.;` yields exactly the
+    three intended variables, correctly parsed."""
+    p = tmp_path / "combo.txt"
+    p.write_text("01JAN20201,234.5601/15/2020\n")
+    src = f"""
+    data out;
+      infile "{p}";
+      input dt date9. amt comma8.2 mdy mmddyy10.;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["out"]
+    assert list(df.columns) == ["dt", "amt", "mdy"]
+    assert list(df["dt"]) == [parse_sas_date_literal("01JAN2020")]
+    assert list(df["amt"]) == [1234.56]
+    assert list(df["mdy"]) == [parse_sas_date_literal("15JAN2020")]

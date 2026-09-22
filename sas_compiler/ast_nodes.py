@@ -187,7 +187,11 @@ class InputStmt(Stmt):
     vars: list  # [(name, is_char)]
     # Populated only when column/pointer-controlled input is used (@n, +n,
     # /, #n, column ranges, or width informats). Each entry is one of:
-    #   ("var", name, is_char, width_or_None, decimals_or_None, start_or_None, end_or_None)
+    #   ("var", name, is_char, width_or_None, decimals_or_None, start_or_None, end_or_None, informat_or_None)
+    #   informat is a lowercased named-informat prefix (e.g. "date",
+    #   "mmddyy", "yymmdd", "comma", "dollar") when the var was declared with
+    #   a named informat (`dt date9.`), else None for plain numeric/char
+    #   width informats.
     #   ("ptr_abs", n)
     #   ("ptr_rel", n)
     #   ("newline",)
