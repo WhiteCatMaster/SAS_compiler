@@ -175,7 +175,17 @@ optional `OUT=`/`OUTP=` correlation-matrix dataset), `REG` (OLS via
 statsmodels — full summary with R², F-stat, coefficient table,
 `OUTPUT OUT= P=/R=` for predicted values / residuals, and a
 `MODEL ... / VIF;` option that prints a per-predictor Variance
-Inflation Factor multicollinearity table), `LOGISTIC`
+Inflation Factor multicollinearity table, and a
+`MODEL ... / SELECTION=BACKWARD|FORWARD;` option for greedy predictor
+selection — `BACKWARD` starts with all predictors and repeatedly drops
+the one with the highest p-value while it exceeds `SLSTAY=` (default
+0.05); `FORWARD` starts with none and repeatedly adds whichever
+candidate gives the lowest entry p-value while it is below `SLENTRY=`
+(default 0.05); each elimination/addition step is logged, then the
+final selected model is reported through the same summary/VIF/
+`OUTPUT OUT=` machinery as the no-`SELECTION=` path; `SELECTION=STEPWISE`
+(SAS's combined backward+forward algorithm) is a deliberate scope cut
+and raises a compile error rather than being approximated), `LOGISTIC`
 (binary logistic regression via statsmodels — summary, odds ratios, an
 "Association of Predicted Probabilities and Observed Responses" section
 with the `c` statistic (concordance / ROC AUC, via scikit-learn) and

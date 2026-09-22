@@ -5,7 +5,7 @@ import pytest
 
 from sas_compiler.macro import MacroProcessor, MacroError
 from sas_compiler.parser import parse
-from sas_compiler.codegen import generate
+from sas_compiler.codegen import generate, CodegenError
 from sas_compiler.cli import main as cli_main
 
 
@@ -970,6 +970,92 @@ def test_proc_reg_vif_reports_high_for_collinear_and_low_for_independent(capsys)
     x3_line = [ln for ln in vif_section.splitlines() if ln.strip().startswith("x3")][0]
     printed_vif_x3 = float(x3_line.split()[-1])
     assert abs(printed_vif_x3 - vif_x3) < 1e-3
+
+
+def _reg_selection_datalines():
+    import numpy as np
+
+    rng = np.random.RandomState(0)
+    n = 200
+    x1 = rng.normal(size=n)
+    x2 = rng.normal(size=n)
+    x3 = rng.normal(size=n)  # pure noise, unrelated to y
+    x4 = rng.normal(size=n)  # pure noise, unrelated to y
+    y = 3 * x1 - 2 * x2 + rng.normal(scale=0.2, size=n)
+    lines = "\n".join(
+        f"{a} {b} {c} {d} {e}" for a, b, c, d, e in zip(x1, x2, x3, x4, y)
+    )
+    return lines
+
+
+def test_proc_reg_selection_backward_drops_noise_predictors(capsys):
+    lines = _reg_selection_datalines()
+    src = f"""
+    data src;
+      input x1 x2 x3 x4 y;
+      datalines;
+{lines}
+    ;
+    run;
+    proc reg data=src;
+      model y = x1 x2 x3 x4 / selection=backward slstay=0.05;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "removed" in out
+    # The final summary (last occurrence, after any step-removal logs)
+    # should retain x1/x2 and drop the noise predictors x3/x4.
+    summary = out.rsplit("OLS Regression Results", 1)[1]
+    assert "x1" in summary
+    assert "x2" in summary
+    assert "x3" not in summary
+    assert "x4" not in summary
+
+
+def test_proc_reg_selection_forward_converges_to_sensible_model(capsys):
+    lines = _reg_selection_datalines()
+    src = f"""
+    data src;
+      input x1 x2 x3 x4 y;
+      datalines;
+{lines}
+    ;
+    run;
+    proc reg data=src;
+      model y = x1 x2 x3 x4 / selection=forward slentry=0.05;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "added" in out
+    summary = out.rsplit("OLS Regression Results", 1)[1]
+    assert "x1" in summary
+    assert "x2" in summary
+    assert "x3" not in summary
+    assert "x4" not in summary
+
+
+def test_proc_reg_selection_stepwise_is_unsupported():
+    src = """
+    data src;
+      input x1 x2 y;
+      datalines;
+    1 5 2
+    2 4 4
+    3 3 6
+    4 2 8
+    5 1 10
+    ;
+    run;
+    proc reg data=src;
+      model y = x1 x2 / selection=stepwise;
+    run;
+    """
+    expanded = MacroProcessor().expand(src)
+    prog = parse(expanded)
+    with pytest.raises(CodegenError, match=r"(?i)selection=stepwise"):
+        generate(prog)
 
 
 def test_proc_logistic_fits_and_scores():
