@@ -113,8 +113,10 @@ plus `VAR`, `WHERE`, `OBS=`/`FIRSTOBS=`, `NOOBS`, and a `SUM` totals row),
 `CONTENTS` (NOBS plus variable names/types), `SORT` (`BY`, `OUT=`,
 `NODUPKEY`, `NODUP`/`NODUPRECS`, `DUPOUT=`), `MEANS`/`SUMMARY` (`CLASS`, `VAR`,
 `OUTPUT OUT=`, explicit stat keywords — `N MEAN STD MIN MAX SUM
-MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
-default — plus `TYPES`/`WAYS` class-combination control), `FREQ` (one-way
+MEDIAN VAR RANGE NMISS P1...P99 LCLM UCLM` (`LCLM`/`UCLM` are the lower/upper
+bounds of a 95% confidence interval for the mean, fixed at 95% — there is no
+`ALPHA=` option to change the confidence level) — in place of the
+N/MEAN/STD/MIN/MAX default — plus `TYPES`/`WAYS` class-combination control), `FREQ` (one-way
 and two-way `TABLES`, one- and two-way `OUTPUT OUT=`
 count/percent datasets, and a `CHISQ` table option on both one-way
 `TABLES` — a Pearson chi-square goodness-of-fit test against equal

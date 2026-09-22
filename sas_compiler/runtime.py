@@ -1575,6 +1575,14 @@ def proc_ttest_report(df: pd.DataFrame, var_names: list, class_var: str | None,
     return None
 
 
+def t_crit(df, alpha=0.05):
+    """Two-sided critical t value at significance `alpha` with `df` degrees
+    of freedom -- used by PROC MEANS' LCLM/UCLM (95% CI for the mean)."""
+    from scipy import stats as _stats
+
+    return _stats.t.ppf(1 - alpha / 2, df) if df > 0 else float("nan")
+
+
 def proc_freq_chisq(df: pd.DataFrame, v1: str, v2: str):
     """Print a PROC FREQ CHISQ-style Pearson chi-square test of
     independence report for a two-way table (v1 rows x v2 columns).

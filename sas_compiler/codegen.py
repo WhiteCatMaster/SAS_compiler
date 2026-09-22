@@ -55,8 +55,9 @@ _DIRECT_FUNCS = {
 }
 
 # PROC MEANS/SUMMARY statistic keyword -> Python expression computing it
-# from `_s` (the analysis variable's non-missing values as a pandas Series)
-# and, for "nmiss" only, the ungrouped `_grp[_v]`.
+# from `_s` (the analysis variable's non-missing values as a pandas Series),
+# for "nmiss" only the ungrouped `_grp[_v]`, and for "lclm"/"uclm" the
+# runtime module `_r` (imported as `_r` at the top of generated code).
 _STAT_EXPR = {
     "n": "float(len(_s))",
     "mean": "_s.mean() if len(_s) else float('nan')",
@@ -69,6 +70,8 @@ _STAT_EXPR = {
     "var": "_s.var() if len(_s) > 1 else float('nan')",
     "range": "(_s.max() - _s.min()) if len(_s) else float('nan')",
     "nmiss": "float(len(_grp[_v]) - len(_s))",
+    "lclm": "_s.mean() - _r.t_crit(len(_s) - 1) * (_s.std() / len(_s) ** 0.5) if len(_s) > 1 else float('nan')",
+    "uclm": "_s.mean() + _r.t_crit(len(_s) - 1) * (_s.std() / len(_s) ** 0.5) if len(_s) > 1 else float('nan')",
 }
 for _p in (1, 5, 10, 25, 50, 75, 90, 95, 99):
     _STAT_EXPR[f"p{_p}"] = f"_s.quantile({_p / 100}) if len(_s) else float('nan')"
