@@ -878,13 +878,20 @@ class CodeGen:
             rows_src = "[" + ", ".join(self._dict_literal(r) for r in rows) + "]"
             self.w(f"_iter = [(row, {{}}) for row in {rows_src}]")
         elif infile_stmt is not None and input_stmt is not None:
-            varspec = [(n, c) for (n, c) in input_stmt.vars]
-            self.w(
-                f"_iter = [(row, {{}}) for row in _r.read_infile("
-                f"{infile_stmt.path!r}, {varspec!r}, dlm={infile_stmt.dlm!r}, "
-                f"dsd={infile_stmt.dsd!r}, firstobs={infile_stmt.firstobs!r}, "
-                f"obs={infile_stmt.obs!r})]"
-            )
+            if input_stmt.items is not None:
+                self.w(
+                    f"_iter = [(row, {{}}) for row in _r.read_infile_columns("
+                    f"{infile_stmt.path!r}, {input_stmt.items!r}, "
+                    f"firstobs={infile_stmt.firstobs!r}, obs={infile_stmt.obs!r})]"
+                )
+            else:
+                varspec = [(n, c) for (n, c) in input_stmt.vars]
+                self.w(
+                    f"_iter = [(row, {{}}) for row in _r.read_infile("
+                    f"{infile_stmt.path!r}, {varspec!r}, dlm={infile_stmt.dlm!r}, "
+                    f"dsd={infile_stmt.dsd!r}, firstobs={infile_stmt.firstobs!r}, "
+                    f"obs={infile_stmt.obs!r})]"
+                )
         else:
             self.w("_iter = _r.iter_once()")
 

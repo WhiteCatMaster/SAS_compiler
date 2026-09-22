@@ -1164,6 +1164,73 @@ def read_infile(path, varspec, dlm=None, dsd=False, firstobs=1, obs=None):
     return rows
 
 
+def read_infile_columns(path, items, firstobs=1, obs=None):
+    """Read a raw text file for INFILE + INPUT using column/pointer-controlled
+    (formatted) input: @n, +n, /, column ranges (start-end) and width
+    informats (w. / w.d).
+
+    items: list of tagged tuples produced by the parser --
+      ("var", name, is_char, width, decimals, start, end)
+      ("ptr_abs", n) / ("ptr_rel", n) / ("newline",)
+
+    Unlike list input, blank physical lines are kept (a blank line is a
+    valid fixed-column record). FIRSTOBS/OBS select 1-based physical lines
+    before any of this. Each full pass over `items` produces one output
+    row; a `newline` item or running out of items just advances the line
+    pointer -- the next row starts on the next unconsumed physical line."""
+    with open(path, "r", newline="") as f:
+        lines = f.read().splitlines()
+    lo = max(int(firstobs or 1) - 1, 0)
+    hi = int(obs) if obs is not None else None
+    lines = lines[lo:hi]
+
+    def get_line(idx):
+        return lines[idx] if 0 <= idx < len(lines) else ""
+
+    rows = []
+    n = len(lines)
+    line_idx = 0
+    while line_idx < n:
+        row = {}
+        col = 0
+        cur = line_idx
+        for item in items:
+            tag = item[0]
+            if tag == "ptr_abs":
+                col = max(int(item[1]) - 1, 0)
+            elif tag == "ptr_rel":
+                col = max(col + int(item[1]), 0)
+            elif tag == "newline":
+                cur += 1
+                col = 0
+            elif tag == "var":
+                _, name, is_char, width, decimals, start, end = item
+                line = get_line(cur)
+                if start is not None and end is not None:
+                    raw = line[start - 1 : end]
+                    col = end
+                elif width is not None:
+                    raw = line[col : col + width]
+                    col += width
+                else:
+                    raw = line[col:]
+                    col = len(line)
+                if is_char:
+                    row[name] = raw.rstrip()
+                else:
+                    text = raw.strip()
+                    try:
+                        val = float(text)
+                        if decimals and "." not in text and text != "":
+                            val = val / (10 ** int(decimals))
+                        row[name] = val
+                    except ValueError:
+                        row[name] = MISSING
+        rows.append(row)
+        line_idx = cur + 1
+    return rows
+
+
 # ---------------- output finalization ----------------
 def finalize_dataset(rows, keep=None, drop=None, rename=None, fallback_cols=None) -> pd.DataFrame:
     if not rows:
