@@ -2778,6 +2778,85 @@ def proc_princomp_fit(df: pd.DataFrame, cols: list, n: int | None = None,
     return result
 
 
+def proc_factor_fit(df: pd.DataFrame, cols: list, n: int | None = None) -> pd.DataFrame:
+    """Exploratory factor analysis (scikit-learn's FactorAnalysis). Mirrors
+    proc_princomp_fit's shape closely: VAR columns are coerced numeric,
+    rows with any missing VAR value are dropped, and the remaining data is
+    standardized with the sample (ddof=1) std before fitting -- factor
+    analysis, like PCA here, is run on the *correlation* matrix, not the
+    raw covariance matrix (real SAS FACTOR's own default).
+
+    N=: when omitted, real SAS FACTOR defaults to the Kaiser criterion --
+    retain every factor whose corresponding eigenvalue of the correlation
+    matrix exceeds 1.0. We reproduce that: a first pass computes the
+    correlation matrix's eigenvalues via `numpy.linalg.eigvalsh` and counts
+    how many exceed 1.0 (clamped to at least 1), then that count is used as
+    `n_components` for `FactorAnalysis` in a second pass. An explicit `n`
+    skips this and is used directly.
+
+    Prints "The FACTOR Procedure" and a "Factor Pattern" loadings table
+    (`FactorAnalysis.components_.T`, one row per VAR variable, one column
+    per factor) -- the same shape/orientation as PROC PRINCOMP's
+    Eigenvectors table, reusing that print styling. Scope cut: unlike
+    PRINCOMP's Eigenvalues table, FactorAnalysis does not expose a clean
+    per-factor proportion-of-variance-explained figure (its rotation is not
+    orthogonal/variance-ordered the way PCA's components are), so no
+    variance-explained table is printed -- loadings only.
+
+    Returns the fit-subset rows augmented with 1-based Factor1..FactorN
+    score columns (real SAS FACTOR's own naming convention for these)."""
+    from sklearn.decomposition import FactorAnalysis
+
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+
+    if len(clean) < 2:
+        raise RuntimeError(
+            f"PROC FACTOR: too few complete observations ({len(clean)}) to "
+            "fit a model"
+        )
+
+    # Standardize with the sample (ddof=1) std, matching proc_princomp_fit's
+    # correlation-matrix-based default.
+    fit_data = ((clean - clean.mean()) / clean.std(ddof=1)).to_numpy()
+
+    if n is None:
+        corr = clean.corr().to_numpy()
+        eigvals = np.linalg.eigvalsh(corr)
+        n = max(1, int((eigvals > 1.0).sum()))
+
+    if n > len(cols):
+        raise RuntimeError(
+            f"PROC FACTOR: N={n} exceeds the number of VAR variables "
+            f"({len(cols)})"
+        )
+    if len(clean) <= len(cols):
+        raise RuntimeError(
+            f"PROC FACTOR: too few complete observations ({len(clean)}) to "
+            f"fit a model with {len(cols)} VAR variable(s)"
+        )
+
+    fa = FactorAnalysis(n_components=n)
+    scores = fa.fit_transform(fit_data)
+    n_comp = scores.shape[1]
+
+    print("The FACTOR Procedure")
+    print("Factor Pattern")
+    pattern_table = pd.DataFrame(
+        fa.components_.T,
+        index=cols,
+        columns=[f"Factor{i + 1}" for i in range(n_comp)],
+    )
+    print(pattern_table.to_string())
+    print()
+
+    result = df.loc[mask].copy()
+    for i in range(n_comp):
+        result[f"Factor{i + 1}"] = scores[:, i]
+    return result
+
+
 def proc_discrim_fit(df: pd.DataFrame, class_var: str, var_names: list) -> pd.DataFrame:
     """Linear discriminant analysis / classification (scikit-learn's
     LinearDiscriminantAnalysis). `class_var` is the single grouping/
