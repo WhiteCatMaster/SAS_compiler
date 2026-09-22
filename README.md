@@ -281,7 +281,25 @@ x retained factors), reusing `PRINCOMP`'s Eigenvectors print styling;
 score columns, matching real SAS's own naming for these. Scope cut: no
 variance-explained table — unlike PCA's components, `FactorAnalysis`
 does not expose a clean per-factor proportion-of-variance figure, so only
-the loadings are printed), and `SURVEYSELECT`
+the loadings are printed), `CANCORR` (canonical correlation analysis via
+scikit-learn's `cross_decomposition.CCA` — `VAR var1 var2 ...;` and
+`WITH var1 var2 ...;` name the two sets of numeric variables between which
+canonical correlations are found (both required), fit on the same
+standardize-then-fit data `PRINCOMP`/`FACTOR`/`PLS` use;
+`n_components = min(len(VAR vars), len(WITH vars))`, real SAS CANCORR's own
+default. Prints "The CANCORR Procedure" and a "Canonical Correlation" table
+(one row per canonical variate pair, reusing `PRINCOMP`'s Eigenvalues table
+print styling) — the coefficient for each component is computed as
+`numpy.corrcoef` between that component's VAR-side and WITH-side canonical
+variate scores (`CCA` doesn't expose canonical correlations directly).
+`OUTPUT OUT=`/`OUT=` (same dual-form handling as `PRINCOMP`) gets the
+fit-subset rows augmented with 1-based `Can1..CanN` VAR-side canonical
+variate score columns — a documented naming choice of ours, not an attempt
+to reproduce real SAS CANCORR's own `OUT=` column names. Scope cuts: no
+significance testing (no Wilks' Lambda / approximate F tests — only the
+canonical correlation coefficients themselves are printed), and WITH-side
+scores are not included in `OUT=` (real SAS's `OUT=` has both sides; only
+the VAR side is implemented here)), and `SURVEYSELECT`
 (simple random sampling — `METHOD=SRS`, the only supported method and
 real SAS's own default, so `METHOD=` can be omitted entirely; exactly
 one of `N=n` (an exact sample size) or `SAMPRATE=rate` (a proportion,
@@ -632,7 +650,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/
-  `TIMESERIES`/`PLS`/`NLIN` raise a clear
+  `TIMESERIES`/`PLS`/`NLIN`/`CANCORR` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),

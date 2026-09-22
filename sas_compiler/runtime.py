@@ -2952,6 +2952,83 @@ def proc_pls_fit(df: pd.DataFrame, y: str, xs: list, nfac: int | None = None) ->
     return result
 
 
+def proc_cancorr_fit(df: pd.DataFrame, var_list: list, with_list: list) -> pd.DataFrame:
+    """Canonical correlation analysis (scikit-learn's
+    `cross_decomposition.CCA`). `var_list`/`with_list` are the two sets of
+    numeric variables (`VAR`/`WITH`, both required -- see
+    codegen._gen_proc_cancorr); both are coerced numeric, rows with any
+    missing value in either set are dropped, and each set is standardized
+    with the sample (ddof=1) std before fitting -- the same
+    standardize-then-fit rationale `PRINCOMP`/`FACTOR`/`PLS` use, since
+    canonical correlation (like PLS) is sensitive to variable scaling.
+
+    `n_components = min(len(var_list), len(with_list))` -- the maximum
+    number of canonical variate pairs there can be, and real SAS CANCORR's
+    own default. `CCA` itself only exposes the fitted canonical variates
+    (`x_scores_`/`y_scores_`), not the canonical correlation coefficients
+    themselves, so those are computed here as `numpy.corrcoef(x_scores_[:,
+    i], y_scores_[:, i])` per component -- the actual definition of a
+    canonical correlation (the Pearson correlation between the i-th VAR-side
+    and WITH-side canonical variate).
+
+    Prints "The CANCORR Procedure" and a "Canonical Correlation" table (one
+    row per component, matching `PRINCOMP`'s Eigenvalues table print
+    styling). Scope cut: no significance testing -- real SAS CANCORR also
+    reports Wilks' Lambda and an approximate F test per canonical
+    correlation; only the coefficients themselves are printed here.
+
+    Returns the fit-subset rows augmented with 1-based `Can1..CanN` VAR-side
+    canonical variate score columns -- a documented naming choice of ours,
+    not an attempt to reproduce real SAS CANCORR's own `OUT=` column names.
+    Scope cut: WITH-side scores are out of scope -- real SAS's `OUT=`
+    includes both sides; only the VAR side is implemented here."""
+    from sklearn.cross_decomposition import CCA
+
+    cols = var_list + with_list
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+
+    n_comp = min(len(var_list), len(with_list))
+    if n_comp < 1:
+        raise RuntimeError(
+            "PROC CANCORR: VAR and WITH must each name at least one variable"
+        )
+    if len(clean) <= max(len(var_list), len(with_list)):
+        raise RuntimeError(
+            f"PROC CANCORR: too few complete observations ({len(clean)}) to "
+            f"fit a model with {len(var_list)} VAR and {len(with_list)} WITH "
+            "variable(s)"
+        )
+
+    # Standardize with the sample (ddof=1) std, matching
+    # PRINCOMP/FACTOR/PLS's same standardization rationale.
+    X = ((clean[var_list] - clean[var_list].mean()) / clean[var_list].std(ddof=1)).to_numpy()
+    Y = ((clean[with_list] - clean[with_list].mean()) / clean[with_list].std(ddof=1)).to_numpy()
+
+    cca = CCA(n_components=n_comp)
+    x_scores, y_scores = cca.fit_transform(X, Y)
+
+    corrs = [
+        float(np.corrcoef(x_scores[:, i], y_scores[:, i])[0, 1])
+        for i in range(n_comp)
+    ]
+
+    print("The CANCORR Procedure")
+    print("Canonical Correlation")
+    corr_table = pd.DataFrame(
+        {"Canonical Correlation": corrs},
+        index=[f"Can{i + 1}" for i in range(n_comp)],
+    )
+    print(corr_table.to_string())
+    print()
+
+    result = df.loc[mask].copy()
+    for i in range(n_comp):
+        result[f"Can{i + 1}"] = x_scores[:, i]
+    return result
+
+
 def proc_discrim_fit(df: pd.DataFrame, class_var: str, var_names: list) -> pd.DataFrame:
     """Linear discriminant analysis / classification (scikit-learn's
     LinearDiscriminantAnalysis). `class_var` is the single grouping/
