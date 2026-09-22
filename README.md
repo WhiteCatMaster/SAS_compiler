@@ -181,11 +181,13 @@ table (`if_exists="replace"`); and `PROC SQL` transparently `ATTACH`es
 any SQLite libref into its duckdb session, so `SELECT ... FROM
 libref.table` in a query — including one that joins a real database
 table against an in-memory SAS dataset — works natively without any
-extra sync step. `LIBNAME libref CLEAR;` unassigns it. Non-SQLite URLs
-(Postgres/MySQL/etc) work for `SET`/`MERGE`/`DATA` read/write-through
-via SQLAlchemy, but are not yet wired into `PROC SQL`'s duckdb ATTACH
-(only SQLite is) — query those through a `work.` dataset staged via a
-`SET` first.
+extra sync step. Non-SQLite URLs (Postgres/MySQL/etc) can't be
+`ATTACH`ed directly, so `PROC SQL` instead scans the query text for
+`libref.table` references and stages each one as a duckdb view (via
+SQLAlchemy through `db_read_table`) before running the query — this
+works the same as the SQLite case from the query author's point of
+view, just via a different mechanism under the hood. `LIBNAME libref
+CLEAR;` unassigns it.
 
 **Formats:** a `FORMAT` statement's assignments are tracked per dataset
 (and propagate through `PROC SORT`), and `PROC PRINT` renders formatted
