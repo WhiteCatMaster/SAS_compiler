@@ -169,6 +169,7 @@ class CodeGen:
         self.fcmp_char_functions: set = set()  # ...and which of those return character
         self.fcmp_array_param_positions: dict = {}  # fname -> set of 0-based ARRAY-param arg positions
         self.fcmp_array_params: set = set()  # names of array params of the FCMP function body currently being generated
+        self.fcmp_outargs: dict = {}  # fname -> list of OUTARGS parameter names (in order), for routines that have any
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -365,6 +366,33 @@ class CodeGen:
             return f"_r.{cmp_map[e.op]}({left}, {right})"
         raise CodegenError(f"unsupported operator {e.op!r}")
 
+    def _fcmp_call_args_code(self, name: str, args: list, varmap: str) -> str:
+        """Build the comma-joined Python argument-expression list for a call
+        to PROC FCMP function/subroutine `name`, handling ARRAY-parameter
+        positions (which require a bare declared-ARRAY name at the call
+        site and pass a copied-in list of its current element values)
+        exactly like the plain-scalar-argument case. Shared by both the
+        expression call site (_gen_call) and the CALL-statement call site
+        (_gen_call_stmt) so the two never drift apart."""
+        array_positions = self.fcmp_array_param_positions.get(name)
+        if not array_positions:
+            return ", ".join(self.gen_expr(a, varmap) for a in args)
+        arg_parts = []
+        for i, a in enumerate(args):
+            if i in array_positions:
+                if not (isinstance(a, A.Var) and a.name in self.current_arrays):
+                    raise CodegenError(
+                        f"call to {name}(): argument {i + 1} must be a bare ARRAY name "
+                        f"declared with ARRAY in this DATA step -- PROC FCMP array "
+                        f"parameters only accept a previously declared SAS ARRAY, "
+                        f"passed by value (its current element values are copied in; "
+                        f"mutations inside the function do not propagate back)"
+                    )
+                arg_parts.append(f"[{varmap}.get(v, _r.MISSING) for v in _ARR_{a.name}]")
+            else:
+                arg_parts.append(self.gen_expr(a, varmap))
+        return ", ".join(arg_parts)
+
     def _gen_call(self, e: A.Call, varmap: str) -> str:
         name = e.name.lower()
         m = re.match(r"^dif(\d*)$", name)
@@ -424,24 +452,12 @@ class CodeGen:
                     return repr(float(arrstmt.lo_bound + arrstmt.dim - 1))
                 return repr(float(arrstmt.dim))
         if name in self.fcmp_functions:
-            array_positions = self.fcmp_array_param_positions.get(name)
-            if array_positions:
-                arg_parts = []
-                for i, a in enumerate(e.args):
-                    if i in array_positions:
-                        if not (isinstance(a, A.Var) and a.name in self.current_arrays):
-                            raise CodegenError(
-                                f"call to {name}(): argument {i + 1} must be a bare ARRAY name "
-                                f"declared with ARRAY in this DATA step -- PROC FCMP array "
-                                f"parameters only accept a previously declared SAS ARRAY, "
-                                f"passed by value (its current element values are copied in; "
-                                f"mutations inside the function do not propagate back)"
-                            )
-                        arg_parts.append(f"[{varmap}.get(v, _r.MISSING) for v in _ARR_{a.name}]")
-                    else:
-                        arg_parts.append(self.gen_expr(a, varmap))
-                return f"_fcmp_{name}({', '.join(arg_parts)})"
-            args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
+            if self.fcmp_outargs.get(name):
+                raise CodegenError(
+                    f"PROC FCMP subroutine {name!r} has OUTARGS and must be invoked via "
+                    f"CALL {name}(...), not used as an expression"
+                )
+            args_code = self._fcmp_call_args_code(name, e.args, varmap)
             return f"_fcmp_{name}({args_code})"
         args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
         if name in _FUNC_MAP:
@@ -759,6 +775,27 @@ class CodeGen:
         if name == "execute":
             a0 = s.args[0]
             self.w(f"_r.call_execute({self.gen_expr(a0)})")
+            return
+        if name in self.fcmp_functions:
+            args_code = self._fcmp_call_args_code(name, s.args, "pdv")
+            outarg_positions = self.fcmp_outargs.get(name)
+            if not outarg_positions:
+                self.w(f"_fcmp_{name}({args_code})")
+                return
+            call_site_names = []
+            for pos, oname in outarg_positions:
+                arg = s.args[pos] if pos < len(s.args) else None
+                if not isinstance(arg, A.Var):
+                    raise CodegenError(
+                        f"call to {name}(): argument {pos + 1} corresponds to OUTARGS "
+                        f"parameter {oname!r} and must be a bare variable name -- PROC "
+                        f"FCMP OUTARGS parameters are pass-by-reference and only accept "
+                        f"a bare variable at the call site"
+                    )
+                call_site_names.append(arg.name)
+            self.w(f"_ret_tuple = _fcmp_{name}({args_code})")
+            for i, call_site_name in enumerate(call_site_names, start=1):
+                self.w(f"pdv[{call_site_name!r}] = _ret_tuple[{i}]")
             return
         self.w(f"pass  # unsupported: call {name}(...)")
 
@@ -1178,12 +1215,15 @@ class CodeGen:
         for clause in proc.clauses:
             if clause[0] != "function":
                 continue
-            _, fname, params, is_char, body = clause
+            _, fname, params, is_char, body, kind, outargs = clause
             if not fname:
                 continue
             self.fcmp_functions.add(fname)
             if is_char:
                 self.fcmp_char_functions.add(fname)
+            if outargs:
+                param_positions = {p: i for i, (p, _is_arr) in enumerate(params)}
+                self.fcmp_outargs[fname] = [(param_positions[o], o) for o in outargs]
             array_param_names = {p for p, is_arr in params if is_arr}
             if array_param_names:
                 self.fcmp_array_param_positions[fname] = {i for i, (_, is_arr) in enumerate(params) if is_arr}
@@ -1217,7 +1257,11 @@ class CodeGen:
             self.indent -= 1
             self.fcmp_array_params = set()
             default = "''" if is_char else "_r.MISSING"
-            self.w(f"return pdv.get('__ret__', {default})")
+            if outargs:
+                outarg_parts = ", ".join(f"pdv[{o!r}]" for o in outargs)
+                self.w(f"return (pdv.get('__ret__', {default}), {outarg_parts})")
+            else:
+                self.w(f"return pdv.get('__ret__', {default})")
             self.indent -= 1
         self.w("")
 

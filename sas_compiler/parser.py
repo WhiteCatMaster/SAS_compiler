@@ -1874,7 +1874,8 @@ class Parser:
             if not self.is_kw("function") and not self.is_kw("subroutine"):
                 self.skip_to_semi()
                 continue
-            self.advance()  # 'function' / 'subroutine'
+            kind = self.peek().value.lower()  # 'function' / 'subroutine'
+            self.advance()
             fname = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
             params = []  # list of (name, is_array) -- is_array True for `arr[*]` / `arr{*}`
             if self.peek().type == TokType.LPAREN:
@@ -1909,11 +1910,27 @@ class Parser:
                 is_char = True
                 self.advance()
             self.skip_to_semi()
+            outargs: list = []
+            if self.is_kw("outargs"):
+                scalar_param_names = {p for p, is_arr in params if not is_arr}
+                self.advance()  # 'outargs'
+                while self.peek().type == TokType.IDENT:
+                    oname = self.advance().value.lower()
+                    if oname not in scalar_param_names:
+                        raise self._err(
+                            f"OUTARGS {oname!r} in {kind.upper()} {fname!r} must name one of its "
+                            f"own scalar parameters -- OUTARGS only designates pass-by-reference "
+                            f"output among the routine's own (non-ARRAY) parameters"
+                        )
+                    outargs.append(oname)
+                    if self.peek().type == TokType.COMMA:
+                        self.advance()
+                self.skip_to_semi()
             body = self._parse_stmt_list(stop_kws={"endsub"})
             if self.is_kw("endsub"):
                 self.advance()
                 self.skip_to_semi()
-            clauses.append(("function", fname, params, is_char, body))
+            clauses.append(("function", fname, params, is_char, body, kind, outargs))
         if self.is_kw("run") or self.is_kw("quit"):
             self.advance()
             self.skip_to_semi()

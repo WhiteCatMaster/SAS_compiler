@@ -216,3 +216,129 @@ def test_fcmp_array_parameter_call_site_rejects_non_array():
     """
     with pytest.raises(CodegenError):
         compile_source(src)
+
+
+def test_fcmp_subroutine_outargs_updates_caller_variable():
+    """A SUBROUTINE with OUTARGS is pass-by-reference for the declared
+    parameter(s): CALLing it must write the computed value(s) back into
+    the caller's own variable(s), named at the call site -- not the
+    routine's internal parameter name."""
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine addone(x, y);
+        outargs y;
+        y = x + 1;
+      endsub;
+    run;
+    data out;
+      x = 5;
+      call addone(x, result);
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["out"].iloc[0]
+    assert row["x"] == 5.0
+    assert row["result"] == 6.0
+
+
+def test_fcmp_subroutine_multiple_outargs():
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine divmod(a, b, q, r);
+        outargs q, r;
+        q = int(a / b);
+        r = mod(a, b);
+      endsub;
+    run;
+    data out;
+      call divmod(17, 5, quotient, remainder);
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["out"].iloc[0]
+    assert row["quotient"] == 3.0
+    assert row["remainder"] == 2.0
+
+
+def test_fcmp_plain_call_actually_executes():
+    """CALLing a PROC FCMP routine (SUBROUTINE or FUNCTION, no OUTARGS) as
+    a statement used to be a silent no-op (the generated code fell through
+    to `pass # unsupported: call ...`). It must now actually run the
+    routine's body -- observed here through a runtime side effect
+    (CALL SYMPUTX) that a no-op could never produce."""
+    from sas_compiler import runtime as r
+
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine set_flag(v);
+        call symputx("fcmp_call_stmt_flag", v);
+      endsub;
+    run;
+    data _null_;
+      call set_flag(42);
+    run;
+    """
+    run_sas(src)
+    assert r.MACRO_VARS.get("fcmp_call_stmt_flag") == "42"
+
+
+def test_fcmp_outargs_subroutine_rejected_as_expression():
+    import pytest
+    from sas_compiler import compile_source
+    from sas_compiler.codegen import CodegenError
+
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine addone(x, y);
+        outargs y;
+        y = x + 1;
+      endsub;
+    run;
+    data out;
+      x = 5;
+      z = addone(x, result);
+    run;
+    """
+    with pytest.raises(CodegenError):
+        compile_source(src)
+
+
+def test_fcmp_outargs_call_site_rejects_non_bare_variable():
+    import pytest
+    from sas_compiler import compile_source
+    from sas_compiler.codegen import CodegenError
+
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine addone(x, y);
+        outargs y;
+        y = x + 1;
+      endsub;
+    run;
+    data out;
+      x = 5;
+      call addone(x, x + 1);
+    run;
+    """
+    with pytest.raises(CodegenError):
+        compile_source(src)
+
+
+def test_fcmp_outargs_name_must_match_declared_parameter():
+    import pytest
+    from sas_compiler.parser import ParseError, parse
+
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      subroutine addone(x, y);
+        outargs z;
+        y = x + 1;
+      endsub;
+    run;
+    data out;
+      x = 5;
+      call addone(x, result);
+    run;
+    """
+    with pytest.raises(ParseError):
+        parse(src)
