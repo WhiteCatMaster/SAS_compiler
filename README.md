@@ -279,7 +279,9 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - `SET` nested inside `IF`/`DO` supports a single dataset with sequential
   cursor reads, `POINT=` random access, or `KEY=` keyed lookup, plus
   `NOBS=`/`END=`; other statements (`MERGE`/`UPDATE`/`WHERE`/`INPUT`/
-  `INFILE`/`FILE`/`DATALINES`) stay top-level-only. `SET ... KEY=` doesn't
+  `INFILE`/`DATALINES`) stay top-level-only (`FILE` is the exception --
+  see below, it's a real per-statement effect and may appear nested inside
+  `IF`/`DO`). `SET ... KEY=` doesn't
   use a real SAS index (there's no persistent index infrastructure here):
   the lookup key is inferred as whichever columns of the KEY= dataset are
   also present in the DATA step's own current source row (the `/UNIQUE`
@@ -300,9 +302,18 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   (matching real SAS -- only `/` and a fresh INPUT statement reset it to
   column 1). One file per DATA step; short lines are padded MISSOVER-style
   (no FLOWOVER); no `@` trailing-column-pointer line hold, no other
-  informat families beyond numeric/character width. **FILE** supports one
-  output file per DATA step (last `FILE` wins); `PUT ... FILE=`
-  per-statement routing isn't implemented.
+  informat families beyond numeric/character width. **FILE** is a real
+  runtime statement, matching SAS: it switches the current `PUT`
+  destination at the point it executes, so a DATA step can write to
+  several output files -- every `PUT` after a `FILE` statement (until the
+  next one executes, following normal `IF`/`DO` control flow) writes to
+  that fileref, and `PUT` before any `FILE` has run (or after `FILE
+  LOG`/`PRINT`) writes to stdout. A path is opened lazily on first use and
+  kept open even if its `FILE` statement re-executes (e.g. inside a loop),
+  so re-running the same `FILE "x"` does not truncate or reopen it; `MOD`
+  only controls that first open (append vs. truncate). Not supported: a
+  dynamic fileref computed at runtime (e.g. a `FILE` target read from a
+  variable) -- the path in a `FILE` statement must be a literal string.
 - A `LIBNAME`-backed table can be read via `SET`/`MERGE`/a
   DATA step's own output list, any PROC's `DATA=`/`OUT=`, `PROC APPEND`,
   `PROC IMPORT`, `PROC EXPORT`, and `PROC SQL` (SQLite files are `ATTACH`ed

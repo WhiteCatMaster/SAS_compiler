@@ -152,8 +152,6 @@ class CodeGen:
         self.db_libs: dict = {}  # libref -> conn string, in program order
         self.sgplot_counter = 0  # for default OUT= filenames (sgplot_1.png, ...)
         self.loop_stack: list = []
-        self._put_target: str | None = None  # file handle var for PUT, else stdout
-        self._put_sep: str = " "
         self.fcmp_functions: set = set()  # PROC FCMP function names, callable by name
         self.fcmp_char_functions: set = set()  # ...and which of those return character
         self.fcmp_array_param_positions: dict = {}  # fname -> set of 0-based ARRAY-param arg positions
@@ -491,8 +489,10 @@ class CodeGen:
             self._gen_declare_hash(s)
         elif isinstance(s, A.DeclareHiterStmt):
             self.w(f"_hashes[{s.itername!r}] = _r.SasHIter(_hashes.get({s.hashname!r}))")
+        elif isinstance(s, A.FileStmt):
+            self._gen_file(s)
         elif isinstance(s, (A.MergeStmt, A.UpdateStmt, A.WhereStmt, A.InputStmt,
-                              A.InfileStmt, A.FileStmt, A.DatalinesStmt)):
+                              A.InfileStmt, A.DatalinesStmt)):
             raise CodegenError(
                 f"{type(s).__name__} may only appear at the top level of a DATA step, "
                 "not nested inside IF/DO"
@@ -682,6 +682,18 @@ class CodeGen:
             self.w("_out_rows[_dsname].append(dict(pdv))")
             self.indent -= 1
 
+    def _gen_file(self, s: A.FileStmt):
+        if s.path.lower() in ("log", "print"):
+            self.w("_put_target = None")
+            return
+        self.w(f"if {s.path!r} not in _file_handles:")
+        self.indent += 1
+        mode = "a" if s.mod else "w"
+        self.w(f"_file_handles[{s.path!r}] = open({s.path!r}, {mode!r})")
+        self.indent -= 1
+        self.w(f"_put_target = _file_handles[{s.path!r}]")
+        self.w(f"_put_sep = {(s.dlm or ' ')!r}")
+
     def _gen_put(self, s: A.PutStmt):
         parts = []
         for a in s.args:
@@ -689,14 +701,17 @@ class CodeGen:
                 parts.append(repr(a.value))
             else:
                 parts.append(f"_r.sas_str({self.gen_expr(a)})")
-        if getattr(self, "_put_target", None):
-            sep = getattr(self, "_put_sep", " ")
-            if parts:
-                self.w(f"{self._put_target}.write({sep!r}.join([{', '.join(parts)}]) + '\\n')")
-            else:
-                self.w(f"{self._put_target}.write('\\n')")
+        self.w("if _put_target is not None:")
+        self.indent += 1
+        if parts:
+            self.w(f"_put_target.write(_put_sep.join([{', '.join(parts)}]) + '\\n')")
         else:
-            self.w(f"print({', '.join(parts)})" if parts else "print()")
+            self.w("_put_target.write('\\n')")
+        self.indent -= 1
+        self.w("else:")
+        self.indent += 1
+        self.w(f"print({', '.join(parts)})" if parts else "print()")
+        self.indent -= 1
 
     def _gen_call_stmt(self, s: A.CallStmt):
         name = s.name.lower()
@@ -782,7 +797,6 @@ class CodeGen:
 
         set_stmt = merge_stmt = update_stmt = by_stmt = input_stmt = datalines_stmt = None
         infile_stmt = None
-        file_stmt = None
         arrays: dict[str, A.ArrayStmt] = {}
         retains: list = []
         drops: set = set()
@@ -820,8 +834,6 @@ class CodeGen:
                 input_stmt = s
             elif isinstance(s, A.InfileStmt) and infile_stmt is None:
                 infile_stmt = s
-            elif isinstance(s, A.FileStmt):
-                file_stmt = s  # last FILE wins, mirroring SAS default output
             elif isinstance(s, A.DatalinesStmt) and datalines_stmt is None:
                 datalines_stmt = s
             elif isinstance(s, A.WhereStmt):
@@ -864,6 +876,9 @@ class CodeGen:
         self.indent += 1
         self.w("_lag = _r.new_lag_state()")
         self.w("_hashes = {}")
+        self.w("_put_target = None")
+        self.w("_put_sep = ' '")
+        self.w("_file_handles = {}")
         self.w("pdv = {}")
         for v in sorted(char_vars):
             self.w(f"pdv[{v!r}] = ''")
@@ -943,17 +958,6 @@ class CodeGen:
         else:
             self.w("_iter = _r.iter_once()")
 
-        self._put_target = None
-        self._put_sep = " "
-        need_close = (
-            file_stmt is not None and file_stmt.path.lower() not in ("log", "print")
-        )
-        if need_close:
-            mode = "a" if file_stmt.mod else "w"
-            self.w(f"_fout = open({file_stmt.path!r}, {mode!r})")
-            self._put_target = "_fout"
-            self._put_sep = file_stmt.dlm or " "
-
         self.w("_rownum = 0")
         self.w("for _row, _flags in _iter:")
         self.indent += 1
@@ -991,9 +995,10 @@ class CodeGen:
             self.w("_out_rows[_dsname].append(dict(pdv))")
             self.indent -= 1
         self.indent -= 1  # end for _row
-        if need_close:
-            self.w("_fout.close()")
-        self._put_target = None
+        self.w("for _fh in _file_handles.values():")
+        self.indent += 1
+        self.w("_fh.close()")
+        self.indent -= 1
 
         temp_array_vars = {e for arrstmt in arrays.values() if arrstmt.is_temporary for e in arrstmt.elements}
         auto_drop = (
