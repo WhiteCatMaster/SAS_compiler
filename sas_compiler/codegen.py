@@ -1259,6 +1259,8 @@ class CodeGen:
             self._gen_proc_ttest(proc)
         elif name == "anova":
             self._gen_proc_anova(proc)
+        elif name == "standard":
+            self._gen_proc_standard(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2414,6 +2416,25 @@ class CodeGen:
             self.w(f"_ranked = _rank_src.rank(method='average', ascending={ascending!r}, na_option='keep')")
         for v, rn in zip(var_list, rank_names):
             self.w(f"_df[{rn!r}] = _ranked[{v!r}]")
+        self._store_out(
+            proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
+            out, "_df",
+        )
+
+    def _gen_proc_standard(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        out = normalize_dsname(proc.options["out"]) if isinstance(proc.options.get("out"), str) else dsname
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC STANDARD requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        target_mean = float(proc.options.get("mean", 0))
+        target_std = float(proc.options.get("std", 1))
+        replace = bool(proc.options.get("replace"))
+
+        self.w(f"_df = ({self._proc_src(proc, dsname)}).copy()")
+        self._gen_proc_filters(proc)
+        self.w(f"_df = _r.proc_standardize(_df, {var_list!r}, {target_mean!r}, {target_std!r}, {replace!r})")
         self._store_out(
             proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
             out, "_df",

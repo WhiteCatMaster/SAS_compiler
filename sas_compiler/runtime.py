@@ -2000,6 +2000,28 @@ def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
     return result
 
 
+def proc_standardize(df: pd.DataFrame, var_names: list, target_mean: float = 0.0,
+                      target_std: float = 1.0, replace: bool = False) -> pd.DataFrame:
+    """PROC STANDARD: rescale each VAR column to a target mean/std
+    (z-score transform by default). Missing values stay missing unless
+    REPLACE is set, in which case they are filled with the column's
+    original (pre-transform) mean before rescaling. A zero-variance
+    (e.g. constant) column would divide by zero, so its transformed
+    values are set to missing instead of raising/producing inf."""
+    result = df.copy()
+    for name in var_names:
+        col = pd.to_numeric(result[name], errors="coerce")
+        colmean = col.mean()
+        colstd = col.std()
+        if replace:
+            col = col.fillna(colmean)
+        if pd.isna(colstd) or colstd == 0:
+            result[name] = float("nan")
+        else:
+            result[name] = (col - colmean) / colstd * target_std + target_mean
+    return result
+
+
 # ---------------- PROC SGPLOT ----------------
 def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
     """Render one or more overlaid SGPLOT-style plot statements onto a
