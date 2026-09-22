@@ -1593,6 +1593,45 @@ def proc_freq_chisq(df: pd.DataFrame, v1: str, v2: str):
     return None
 
 
+def proc_freq_measures(df: pd.DataFrame, v1: str, v2: str):
+    """Print a PROC FREQ MEASURES-style report of the odds ratio and
+    relative risk (risk ratio), each with a 95% confidence interval, for
+    a strictly 2x2 table (v1 rows x v2 columns). Real SAS's MEASURES
+    option is only defined for a 2x2 table; a table of any other shape
+    prints a SAS-style warning instead of crashing. As a scope cut, only
+    one relative risk direction (row 1 vs row 2, using column 1 as the
+    reference) is reported, rather than SAS's both Row1/Col1 and
+    Row2/Col2 relative risks. Returns None (real PROC FREQ's MEASURES
+    option has no OUT= dataset)."""
+    from statsmodels.stats.contingency_tables import Table2x2
+
+    ct = pd.crosstab(df[v1], df[v2])
+    print("Estimates of the Relative Risk (Row1/Col1)")
+    print()
+    if ct.shape != (2, 2):
+        print("WARNING: Table does not have exactly 2 rows and 2 columns; "
+              "odds ratio and relative risk statistics cannot be computed.")
+        print()
+        return None
+    try:
+        t = Table2x2(ct.to_numpy().astype(float))
+        odds_ratio = float(t.oddsratio)
+        or_lcl, or_ucl = (float(x) for x in t.oddsratio_confint())
+        risk_ratio = float(t.riskratio)
+        rr_lcl, rr_ucl = (float(x) for x in t.riskratio_confint())
+    except (ValueError, ZeroDivisionError) as e:
+        print(f"WARNING: Odds ratio and relative risk statistics could not "
+              f"be computed (degenerate table): {e}")
+        print()
+        return None
+
+    print("Statistic                       Value      95% Confidence Limits")
+    print(f"Odds Ratio                    {odds_ratio:>10.4f}  {or_lcl:>10.4f}  {or_ucl:>10.4f}")
+    print(f"Relative Risk (Column 1)      {risk_ratio:>10.4f}  {rr_lcl:>10.4f}  {rr_ucl:>10.4f}")
+    print()
+    return None
+
+
 def proc_freq_chisq_oneway(df: pd.DataFrame, var: str):
     """Print a PROC FREQ CHISQ-style Pearson chi-square goodness-of-fit
     report for a one-way table (var), testing the null hypothesis that

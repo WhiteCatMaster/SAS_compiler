@@ -1693,6 +1693,7 @@ class CodeGen:
         table_part = tables_raw.split("/", 1)[0].strip() if tables_raw else ""
         table_opts = tables_raw.split("/", 1)[1] if tables_raw and "/" in tables_raw else ""
         want_chisq = bool(re.search(r"(?i)\bchisq\b", table_opts))
+        want_measures = bool(re.search(r"(?i)\b(measures|relrisk|riskdiff)\b", table_opts))
         output_clause = self._clause(proc, "output")
         out = output_clause.get("out") if output_clause else None
         if out:
@@ -1706,6 +1707,8 @@ class CodeGen:
                 self.w(f"print(pd.crosstab(_df[{v1!r}], _df[{v2!r}]))")
                 if want_chisq:
                     self.w(f"_r.proc_freq_chisq(_df, {v1!r}, {v2!r})")
+                if want_measures:
+                    self.w(f"_r.proc_freq_measures(_df, {v1!r}, {v2!r})")
                 if out:
                     self.w(f"_ct = pd.crosstab(_df[{v1!r}], _df[{v2!r}])")
                     self.w(f"_freq_rows.extend({{'{v1}': i, '{v2}': c, 'count': int(n), 'percent': 100.0 * n / max(len(_df), 1)}} for (i, c), n in _ct.stack().items())")

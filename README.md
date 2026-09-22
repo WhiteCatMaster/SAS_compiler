@@ -120,7 +120,10 @@ count/percent datasets, and a `CHISQ` table option on both one-way
 `TABLES` — a Pearson chi-square goodness-of-fit test against equal
 proportions across levels — and two-way `TABLES` — a Pearson chi-square
 test of independence report; `TESTP=` for narrowing the one-way expected
-proportions is out of scope), `APPEND`,
+proportions is out of scope; a `MEASURES` (or `RELRISK`/`RISKDIFF`)
+two-way `TABLES` option reports the odds ratio and relative risk (risk
+ratio), each with a 95% confidence interval, for a strictly 2x2 table —
+any other table shape prints a warning instead of computing them), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`, `PREFIX=`/`SUFFIX=`/`DELIMITER=`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE` —
 including `libref.table` file/table renames and drops),
