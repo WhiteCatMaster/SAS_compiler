@@ -1343,6 +1343,8 @@ class CodeGen:
             self._gen_proc_lifetest(proc)
         elif name == "genmod":
             self._gen_proc_genmod(proc)
+        elif name == "mixed":
+            self._gen_proc_mixed(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2234,6 +2236,39 @@ class CodeGen:
         self.w(
             f"_r.proc_genmod_fit(_df, {y!r}, {xs!r}, dist={dist!r}, link={link!r})"
         )
+
+    def _gen_proc_mixed(self, proc: A.ProcStep):
+        """PROC MIXED, scoped down hard to a single random-intercept model:
+
+            MODEL y = x1 x2;
+            RANDOM INTERCEPT / SUBJECT=subjectvar;
+
+        Fixed effects are ordinary numeric predictors (no CLASS-driven
+        dummy-encoding, matching PROC REG's plain-numeric baseline rather
+        than PROC GLM/LOGISTIC's CLASS support). Exactly one random
+        intercept grouping variable is supported: no random slopes, no
+        multiple RANDOM statements, no REPEATED, no CLASS. Print-only (no
+        OUTPUT OUT=/LSMEANS) -- see runtime.proc_mixed_fit's docstring."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC MIXED requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+
+        subject_var = None
+        for k, v in proc.clauses:
+            if k == "random":
+                subject_var = v
+                break
+        if not subject_var:
+            raise CodegenError(
+                "PROC MIXED requires a RANDOM INTERCEPT / SUBJECT=...; "
+                "statement (only a single random-intercept model is supported)"
+            )
+
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_r.proc_mixed_fit(_df, {y!r}, {xs!r}, {subject_var!r})")
 
     def _gen_proc_logistic(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

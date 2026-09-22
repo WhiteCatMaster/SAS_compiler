@@ -1638,6 +1638,39 @@ class Parser:
                         self.advance()
                 clauses.append(("time", (timevar, censorvar, censorvalue)))
                 self.skip_to_semi()
+            elif ckw == "random" and name == "mixed":
+                # RANDOM INTERCEPT / SUBJECT=subjectvar;
+                # This is the only RANDOM shape PROC MIXED supports here
+                # (single random intercept, no random slopes, no multiple
+                # RANDOM statements). Anything else: skip the clause and let
+                # _gen_proc_mixed's "RANDOM statement required" check raise
+                # a clear compile error instead of mis-parsing it.
+                self.advance()
+                if not self.is_kw("intercept"):
+                    self.skip_to_semi()
+                else:
+                    self.advance()  # 'intercept'
+                    ok = True
+                    if self.peek().type == TokType.OP and self.peek().value == "/":
+                        self.advance()
+                    else:
+                        ok = False
+                    if ok and self.is_kw("subject"):
+                        self.advance()
+                    else:
+                        ok = False
+                    if ok and self.peek().type == TokType.OP and self.peek().value == "=":
+                        self.advance()
+                    else:
+                        ok = False
+                    subject_var = ""
+                    if ok and self.peek().type == TokType.IDENT:
+                        subject_var = self.advance().value.lower()
+                    else:
+                        ok = False
+                    if ok and subject_var:
+                        clauses.append(("random", subject_var))
+                    self.skip_to_semi()
             elif ckw in ("var", "by", "class", "id", "freq", "with", "strata"):
                 self.advance()
                 names = []

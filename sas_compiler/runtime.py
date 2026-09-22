@@ -2278,6 +2278,52 @@ def proc_genmod_fit(df: pd.DataFrame, y: str, xs: list, dist: str = "normal",
     return None
 
 
+def proc_mixed_fit(df: pd.DataFrame, y: str, xs: list, subject_var: str):
+    """Fit a linear mixed-effects model with a single random intercept
+    (statsmodels MixedLM via the formula API) and print its summary.
+
+    Scoped down hard from real SAS PROC MIXED to exactly one shape:
+
+        MODEL y = x1 x2;
+        RANDOM INTERCEPT / SUBJECT=subjectvar;
+
+    i.e. ordinary numeric fixed-effect predictors (no CLASS-driven
+    dummy-encoding, matching PROC REG's plain-numeric baseline) plus a
+    single random-intercept grouping variable named by `subject_var`. No
+    random slopes, no multiple RANDOM statements, no REPEATED covariance
+    structures, no CLASS. Print-only (no OUTPUT OUT=/LSMEANS) -- always
+    returns None."""
+    import statsmodels.formula.api as smf
+
+    cols = [y] + xs + [subject_var]
+    sub = df[cols].copy()
+    sub[y] = pd.to_numeric(sub[y], errors="coerce")
+    for c in xs:
+        sub[c] = pd.to_numeric(sub[c], errors="coerce")
+    sub = sub.dropna()
+
+    n_groups = sub[subject_var].nunique()
+    if len(sub) <= len(xs) + 1:
+        raise RuntimeError(
+            f"PROC MIXED: too few complete observations ({len(sub)}) to fit "
+            f"a model with {len(xs)} fixed-effect predictor(s)"
+        )
+    if n_groups < 2:
+        raise RuntimeError(
+            "PROC MIXED: the SUBJECT= grouping variable has fewer than 2 "
+            "distinct groups -- a random-intercept model cannot be fit"
+        )
+
+    formula = f"{y} ~ " + " + ".join(xs) if xs else f"{y} ~ 1"
+    try:
+        model = smf.mixedlm(formula, data=sub, groups=sub[subject_var]).fit()
+    except Exception as e:
+        raise RuntimeError(f"PROC MIXED: model fit failed: {e}") from e
+
+    print(model.summary())
+    return None
+
+
 # ---------------- LIBNAME / real database integration ----------------
 DB_LIBS: dict = {}
 
