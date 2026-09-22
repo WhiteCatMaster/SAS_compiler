@@ -174,8 +174,12 @@ alone), two-sample independent groups (`CLASS groupvar; VAR var1
 var2 ...;`, reporting both pooled-variance and Satterthwaite/Welch
 t-test results), or paired (`PAIRED var1*var2 ...;`, one paired
 t-test per pair); prints N/Mean/StdDev/StdErr and the t/df/Pr>|t|
-results, no `OUT=` dataset). `MODEL y = x1 x2 ...;` is the shared
-syntax for `REG`, `LOGISTIC`, and `GLM`.
+results, no `OUT=` dataset), and `ANOVA` (one-way only — one `CLASS`
+variable and `MODEL y = classvar;` — via scipy's `f_oneway`; prints
+Class Level Information plus the classic Source/DF/Sum of
+Squares/Mean Square/F Value/Pr > F table, R-Square, Coeff Var, and
+Root MSE, no `OUT=` dataset). `MODEL y = x1 x2 ...;` is the shared
+syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
