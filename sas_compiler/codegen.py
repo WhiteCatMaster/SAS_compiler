@@ -156,6 +156,8 @@ class CodeGen:
         self._put_sep: str = " "
         self.fcmp_functions: set = set()  # PROC FCMP function names, callable by name
         self.fcmp_char_functions: set = set()  # ...and which of those return character
+        self.fcmp_array_param_positions: dict = {}  # fname -> set of 0-based ARRAY-param arg positions
+        self.fcmp_array_params: set = set()  # names of array params of the FCMP function body currently being generated
 
     def w(self, line: str):
         self.lines.append(("    " * self.indent) + line)
@@ -195,6 +197,15 @@ class CodeGen:
             term = f"(int({ix}) - {lo})"
             parts.append(f"{term} * {mult}" if mult != 1 else term)
         return " + ".join(parts)
+
+    def _fcmp_array_index_code(self, name: str, indices, index, varmap: str) -> str:
+        """Python expr for the single SAS subscript of a PROC FCMP `arr[*]`
+        array parameter -- these are plain 1-based Python lists with no
+        bounds info, so only a single dimension is supported."""
+        idxs = indices if indices is not None else [index]
+        if len(idxs) != 1:
+            raise CodegenError(f"PROC FCMP array parameter {name!r} only supports 1-D indexing (arr[*])")
+        return self.gen_expr(idxs[0], varmap)
 
     def generate(self, prog: A.Program, nested: bool = False) -> str:
         self.w("import sas_compiler.runtime as _r")
@@ -252,6 +263,9 @@ class CodeGen:
         if isinstance(e, A.DotVar):
             return f"{varmap}.get({e.kind + '_' + e.var!r}, False)"
         if isinstance(e, A.ArrayRef):
+            if e.name in self.fcmp_array_params:
+                idx_code = self._fcmp_array_index_code(e.name, e.indices, e.index, varmap)
+                return f"{e.name}[int({idx_code})-1]"
             idx = self._arr_offset_expr(e.name, e.indices if e.indices is not None else [e.index], varmap)
             return f"{varmap}.get(_ARR_{e.name}[{idx}], _r.MISSING)"
         if isinstance(e, A.UnaryOp):
@@ -363,6 +377,13 @@ class CodeGen:
             return f"_r.sas_date({y_}, {m_}, {d_})"
         if name in ("dim", "hbound", "lbound") and e.args and isinstance(e.args[0], A.Var):
             arrname = e.args[0].name
+            if arrname in self.fcmp_array_params:
+                if name == "dim":
+                    return f"float(len({arrname}))"
+                raise CodegenError(
+                    f"{name}({arrname}): bounds are unknown for a PROC FCMP array parameter "
+                    f"(passed by value, with no bounds info) -- use DIM() instead"
+                )
             arrstmt = self.current_arrays.get(arrname)
             if arrstmt is not None:
                 dim_arg = None
@@ -391,9 +412,27 @@ class CodeGen:
                 if name == "hbound":
                     return repr(float(arrstmt.lo_bound + arrstmt.dim - 1))
                 return repr(float(arrstmt.dim))
-        args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
         if name in self.fcmp_functions:
+            array_positions = self.fcmp_array_param_positions.get(name)
+            if array_positions:
+                arg_parts = []
+                for i, a in enumerate(e.args):
+                    if i in array_positions:
+                        if not (isinstance(a, A.Var) and a.name in self.current_arrays):
+                            raise CodegenError(
+                                f"call to {name}(): argument {i + 1} must be a bare ARRAY name "
+                                f"declared with ARRAY in this DATA step -- PROC FCMP array "
+                                f"parameters only accept a previously declared SAS ARRAY, "
+                                f"passed by value (its current element values are copied in; "
+                                f"mutations inside the function do not propagate back)"
+                            )
+                        arg_parts.append(f"[{varmap}.get(v, _r.MISSING) for v in _ARR_{a.name}]")
+                    else:
+                        arg_parts.append(self.gen_expr(a, varmap))
+                return f"_fcmp_{name}({', '.join(arg_parts)})"
+            args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
             return f"_fcmp_{name}({args_code})"
+        args_code = ", ".join(self.gen_expr(a, varmap) for a in e.args)
         if name in _FUNC_MAP:
             return f"_r.{_FUNC_MAP[name]}({args_code})"
         if name in _DIRECT_FUNCS:
@@ -486,8 +525,12 @@ class CodeGen:
         if isinstance(s.target, A.Var):
             self.w(f"pdv[{s.target.name!r}] = {expr_code}")
         elif isinstance(s.target, A.ArrayRef):
-            idx = self._arr_offset_expr(s.target.name, s.target.indices if s.target.indices is not None else [s.target.index])
-            self.w(f"pdv[_ARR_{s.target.name}[{idx}]] = {expr_code}")
+            if s.target.name in self.fcmp_array_params:
+                idx_code = self._fcmp_array_index_code(s.target.name, s.target.indices, s.target.index, "pdv")
+                self.w(f"{s.target.name}[int({idx_code})-1] = {expr_code}")
+            else:
+                idx = self._arr_offset_expr(s.target.name, s.target.indices if s.target.indices is not None else [s.target.index])
+                self.w(f"pdv[_ARR_{s.target.name}[{idx}]] = {expr_code}")
         else:
             raise CodegenError(f"invalid assignment target {s.target!r}")
 
@@ -663,9 +706,14 @@ class CodeGen:
             if isinstance(target, A.Var):
                 self.w(f"pdv[{target.name!r}] = _r.nomiss_sum(pdv.get({target.name!r}, 0.0), {expr_code})")
             elif isinstance(target, A.ArrayRef):
-                idx = self._arr_offset_expr(target.name, target.indices if target.indices is not None else [target.index])
-                self.w(f"_k = _ARR_{target.name}[{idx}]")
-                self.w(f"pdv[_k] = _r.nomiss_sum(pdv.get(_k, 0.0), {expr_code})")
+                if target.name in self.fcmp_array_params:
+                    idx_code = self._fcmp_array_index_code(target.name, target.indices, target.index, "pdv")
+                    self.w(f"_k = int({idx_code}) - 1")
+                    self.w(f"{target.name}[_k] = _r.nomiss_sum({target.name}[_k], {expr_code})")
+                else:
+                    idx = self._arr_offset_expr(target.name, target.indices if target.indices is not None else [target.index])
+                    self.w(f"_k = _ARR_{target.name}[{idx}]")
+                    self.w(f"pdv[_k] = _r.nomiss_sum(pdv.get(_k, 0.0), {expr_code})")
             return
         if name == "symput":
             a0, a1 = s.args
@@ -1094,7 +1142,14 @@ class CodeGen:
         so nothing there needs to change for this to work. RETURN(expr)
         (FcmpReturnStmt) stores the result at pdv['__ret__'] and raises the
         same _RowReturn used by the ordinary DATA step RETURN, caught right
-        here instead of by a row loop."""
+        here instead of by a row loop.
+
+        `params` is a list of (name, is_array) pairs -- `is_array` marks a
+        1-D `arr[*]`/`arr{*}` parameter. Such a parameter is passed as a
+        plain Python list (the generated `def` takes it positionally, no
+        pdv indirection); `arr{i}`/`arr[i]` references inside the body are
+        rewritten straight to `arr[int(i)-1]` via self.fcmp_array_params,
+        which is populated for the duration of this function's body only."""
         for clause in proc.clauses:
             if clause[0] != "function":
                 continue
@@ -1104,6 +1159,9 @@ class CodeGen:
             self.fcmp_functions.add(fname)
             if is_char:
                 self.fcmp_char_functions.add(fname)
+            array_param_names = {p for p, is_arr in params if is_arr}
+            if array_param_names:
+                self.fcmp_array_param_positions[fname] = {i for i, (_, is_arr) in enumerate(params) if is_arr}
             char_locals: set = set()
             for st in body:
                 if isinstance(st, A.LengthStmt):
@@ -1111,13 +1169,15 @@ class CodeGen:
                         if ischar:
                             char_locals.add(n)
 
-            self.w(f"def _fcmp_{fname}({', '.join(params)}):")
+            self.w(f"def _fcmp_{fname}({', '.join(p for p, _ in params)}):")
             self.indent += 1
             self.w("pdv = {}")
             for n in sorted(char_locals):
                 self.w(f"pdv[{n!r}] = ''")
-            for p in params:
-                self.w(f"pdv[{p!r}] = {p}")
+            for p, is_arr in params:
+                if not is_arr:
+                    self.w(f"pdv[{p!r}] = {p}")
+            self.fcmp_array_params = array_param_names
             self.w("try:")
             self.indent += 1
             if body:
@@ -1130,6 +1190,7 @@ class CodeGen:
             self.indent += 1
             self.w("pass")
             self.indent -= 1
+            self.fcmp_array_params = set()
             default = "''" if is_char else "_r.MISSING"
             self.w(f"return pdv.get('__ret__', {default})")
             self.indent -= 1

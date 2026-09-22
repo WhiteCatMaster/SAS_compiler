@@ -114,3 +114,105 @@ def test_fcmp_two_argument_function():
     """
     ds = run_sas(src)
     assert ds["out"].iloc[0]["z"] == 7.0
+
+
+def test_fcmp_array_parameter_sum():
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      function arr_sum(vals[*], n);
+        total = 0;
+        do i = 1 to n;
+          total = total + vals{i};
+        end;
+        return(total);
+      endsub;
+    run;
+    data out;
+      array nums{4} (10, 20, 30, 40);
+      total = arr_sum(nums, 4);
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"].iloc[0]["total"] == 100.0
+
+
+def test_fcmp_array_parameter_find_max():
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      function arr_max(vals[*], n);
+        m = vals{1};
+        do i = 2 to n;
+          if vals{i} > m then m = vals{i};
+        end;
+        return(m);
+      endsub;
+    run;
+    data out;
+      array nums{5} (3, 9, 2, 7, 1);
+      biggest = arr_max(nums, 5);
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"].iloc[0]["biggest"] == 9.0
+
+
+def test_fcmp_array_parameter_dim():
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      function arr_len(vals[*]);
+        return(dim(vals));
+      endsub;
+    run;
+    data out;
+      array nums{4} (1, 2, 3, 4);
+      n = arr_len(nums);
+    run;
+    """
+    ds = run_sas(src)
+    assert ds["out"].iloc[0]["n"] == 4.0
+
+
+def test_fcmp_array_parameter_is_pass_by_value():
+    """Mutating the array parameter inside the function must not affect the
+    caller's SAS array afterwards -- PROC FCMP array params are copied in,
+    not passed by reference (documented scope cut)."""
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      function zero_out(vals[*], n);
+        do i = 1 to n;
+          vals{i} = 0;
+        end;
+        return(1);
+      endsub;
+    run;
+    data out;
+      array nums{3} (1, 2, 3);
+      ignore = zero_out(nums, 3);
+      a = nums{1};
+      b = nums{2};
+      c = nums{3};
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["out"].iloc[0]
+    assert (row["a"], row["b"], row["c"]) == (1.0, 2.0, 3.0)
+
+
+def test_fcmp_array_parameter_call_site_rejects_non_array():
+    import pytest
+    from sas_compiler import compile_source
+    from sas_compiler.codegen import CodegenError
+
+    src = """
+    proc fcmp outlib=work.funcs.myfuncs;
+      function arr_sum(vals[*], n);
+        return(vals{1});
+      endsub;
+    run;
+    data out;
+      x = 5;
+      total = arr_sum(x, 1);
+    run;
+    """
+    with pytest.raises(CodegenError):
+        compile_source(src)

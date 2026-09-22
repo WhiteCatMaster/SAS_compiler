@@ -1753,12 +1753,28 @@ class Parser:
                 continue
             self.advance()  # 'function' / 'subroutine'
             fname = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
-            params = []
+            params = []  # list of (name, is_array) -- is_array True for `arr[*]` / `arr{*}`
             if self.peek().type == TokType.LPAREN:
                 self.advance()
                 while self.peek().type != TokType.RPAREN and self.peek().type != TokType.EOF:
                     if self.peek().type == TokType.IDENT:
-                        params.append(self.advance().value.lower())
+                        pname = self.advance().value.lower()
+                        is_array = False
+                        if self.peek().type == TokType.OP and self.peek().value in ("{", "["):
+                            self.advance()
+                            if self.peek().type == TokType.OP and self.peek().value == "*":
+                                self.advance()
+                                is_array = True
+                            # Skip anything else up to the closing bracket
+                            # (e.g. a fixed size like arr[10]) -- only the
+                            # `[*]`/`{*}` 1-D form is supported as an array
+                            # parameter; other forms are parsed but treated
+                            # as an (unsupported) scalar.
+                            while not (self.peek().type == TokType.OP and self.peek().value in ("}", "]")) and self.peek().type not in (TokType.EOF, TokType.RPAREN):
+                                self.advance()
+                            if self.peek().type == TokType.OP and self.peek().value in ("}", "]"):
+                                self.advance()
+                        params.append((pname, is_array))
                     else:
                         self.advance()
                     if self.peek().type == TokType.COMMA:
