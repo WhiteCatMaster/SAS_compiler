@@ -229,13 +229,14 @@ printed output into its own file); closing one leaves the others open.
 HTML output detects blocks of `to_string()`-style whitespace-aligned
 tabular text and renders them as real `<table>`/`<tr>`/`<td>` markup
 with light CSS borders/padding, falling back to a plain `<pre>` block
-for narrow output or anything that doesn't parse as a table; RTF
-output is a minimal valid `{\rtf1 ...}` document with the captured
-text as monospace paragraphs. PDF output uses the same table-detection
-heuristic as HTML — table-shaped chunks render as a real `reportlab`
-`Table` flowable with a light grid and shaded header row, everything
-else as monospace preformatted text — built into a PDF via
-`SimpleDocTemplate`. Other ODS destinations/statements (`LISTING`,
+for narrow output or anything that doesn't parse as a table. RTF and
+PDF output use the same table-detection heuristic as HTML: table-shaped
+chunks render as real structured tables — `\trowd`/`\cellx`/`\intbl`/
+`\row` markup with a bold header row for RTF, a `reportlab` `Table`
+flowable with a light grid and shaded header row for PDF — and
+everything else falls back to monospace text (`\par`-separated
+paragraphs for RTF, preformatted text for PDF, built into a PDF via
+`SimpleDocTemplate`). Other ODS destinations/statements (`LISTING`,
 `SELECT`/`EXCLUDE`, `_ALL_`, ...) are parsed and safely ignored rather
 than raising an error.
 
@@ -329,9 +330,9 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - **ODS** table detection is heuristic (whitespace-aligned columns with
   a consistent field count across the first couple of lines); output
   that doesn't match that shape renders as `<pre>`/monospace narrative
-  text instead of a table even if a human would call it tabular. RTF
-  output is plain monospace paragraphs, not real RTF tables. Re-opening
-  the *same* destination while it's already open closes and writes the
+  text (RTF/PDF: preformatted text) instead of a table even if a human
+  would call it tabular. Re-opening the *same* destination while it's
+  already open closes and writes the
   previous one first rather than erroring or interleaving (HTML, RTF
   and PDF are independent destinations and can all be open at the same
   time).
