@@ -280,16 +280,18 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   SAS's "unrefreshed variables keep their prior value" behavior.
 - **INFILE** supports list input as well as column/pointer-controlled
   ("formatted") input: absolute (`@n`) and relative (`+n`) column pointers,
-  `/` to hold the record across the next physical line, `var start-end`
-  (numeric) / `var $ start-end` (character) column ranges, and width
-  informats (`var w.` / `var $w.`, with an accepted `.d` decimal suffix
-  that applies implied-decimal scaling when the field text has no literal
-  `.`). One file per DATA step; short lines are padded MISSOVER-style (no
-  FLOWOVER); `/` only implements simple line-hold (no `#n` line pointers,
-  no `@` trailing-column-pointer line hold, no other informat families
-  beyond numeric/character width). **FILE** supports one output file per
-  DATA step (last `FILE` wins); `PUT ... FILE=` per-statement routing
-  isn't implemented.
+  `/` to hold the record across the next physical line, `#n` to jump the
+  line pointer directly to the nth physical line of the current record,
+  `var start-end` (numeric) / `var $ start-end` (character) column ranges,
+  and width informats (`var w.` / `var $w.`, with an accepted `.d` decimal
+  suffix that applies implied-decimal scaling when the field text has no
+  literal `.`). A bare `#n` leaves the column pointer wherever it was
+  (matching real SAS -- only `/` and a fresh INPUT statement reset it to
+  column 1). One file per DATA step; short lines are padded MISSOVER-style
+  (no FLOWOVER); no `@` trailing-column-pointer line hold, no other
+  informat families beyond numeric/character width. **FILE** supports one
+  output file per DATA step (last `FILE` wins); `PUT ... FILE=`
+  per-statement routing isn't implemented.
 - A `LIBNAME`-backed table can be read via `SET`/`MERGE`/a
   DATA step's own output list, any PROC's `DATA=`/`OUT=`, `PROC APPEND`,
   `PROC IMPORT`, `PROC EXPORT`, and `PROC SQL` (SQLite files are `ATTACH`ed

@@ -1168,18 +1168,32 @@ def read_infile(path, varspec, dlm=None, dsd=False, firstobs=1, obs=None):
 
 def read_infile_columns(path, items, firstobs=1, obs=None):
     """Read a raw text file for INFILE + INPUT using column/pointer-controlled
-    (formatted) input: @n, +n, /, column ranges (start-end) and width
+    (formatted) input: @n, +n, /, #n, column ranges (start-end) and width
     informats (w. / w.d).
 
     items: list of tagged tuples produced by the parser --
       ("var", name, is_char, width, decimals, start, end)
-      ("ptr_abs", n) / ("ptr_rel", n) / ("newline",)
+      ("ptr_abs", n) / ("ptr_rel", n) / ("newline",) / ("line_abs", n)
 
     Unlike list input, blank physical lines are kept (a blank line is a
     valid fixed-column record). FIRSTOBS/OBS select 1-based physical lines
     before any of this. Each full pass over `items` produces one output
     row; a `newline` item or running out of items just advances the line
-    pointer -- the next row starts on the next unconsumed physical line."""
+    pointer -- the next row starts on the next unconsumed physical line.
+
+    `line_abs` (#n) jumps the line pointer directly to the nth physical
+    line of the *current record* (1-based, relative to the record's first
+    line -- i.e. `line_idx` below), unlike `/` which only steps forward one
+    line at a time. Design choice: a bare `#n` leaves the column pointer
+    (`col`) exactly where it was, matching real SAS (which does not reset
+    the column pointer for `#n` alone -- only `/` and a fresh INPUT
+    statement reset it to column 1). Because `#n` can jump forward past
+    lines a trailing `/` never touched, or backward to a line already read
+    earlier in this same INPUT statement, advancing to the next record
+    can't just use the final `cur` -- it must use the *highest* line index
+    touched anywhere in the pass (`max_cur`), so a `#n` jump never causes a
+    physical line to be re-read into a later record, and never skips a
+    line that this record already consumed."""
     with open(path, "r", newline="") as f:
         lines = f.read().splitlines()
     lo = max(int(firstobs or 1) - 1, 0)
@@ -1196,6 +1210,7 @@ def read_infile_columns(path, items, firstobs=1, obs=None):
         row = {}
         col = 0
         cur = line_idx
+        max_cur = cur
         for item in items:
             tag = item[0]
             if tag == "ptr_abs":
@@ -1205,6 +1220,15 @@ def read_infile_columns(path, items, firstobs=1, obs=None):
             elif tag == "newline":
                 cur += 1
                 col = 0
+                max_cur = max(max_cur, cur)
+            elif tag == "line_abs":
+                # Jump straight to the nth physical line of this record.
+                # Column pointer is deliberately left unchanged (see
+                # docstring). Track max_cur separately from cur so a
+                # forward-or-backward jump can't corrupt end-of-record
+                # advancement below.
+                cur = max(line_idx + int(item[1]) - 1, 0)
+                max_cur = max(max_cur, cur)
             elif tag == "var":
                 _, name, is_char, width, decimals, start, end = item
                 line = get_line(cur)
@@ -1229,7 +1253,7 @@ def read_infile_columns(path, items, firstobs=1, obs=None):
                     except ValueError:
                         row[name] = MISSING
         rows.append(row)
-        line_idx = cur + 1
+        line_idx = max_cur + 1
     return rows
 
 
