@@ -186,11 +186,12 @@ class WhereStmt(Stmt):
 class InputStmt(Stmt):
     vars: list  # [(name, is_char)]
     # Populated only when column/pointer-controlled input is used (@n, +n,
-    # /, column ranges, or width informats). Each entry is one of:
+    # /, #n, column ranges, or width informats). Each entry is one of:
     #   ("var", name, is_char, width_or_None, decimals_or_None, start_or_None, end_or_None)
     #   ("ptr_abs", n)
     #   ("ptr_rel", n)
     #   ("newline",)
+    #   ("line_abs", n)
     # None means plain list input: codegen keeps calling _r.read_infile
     # exactly as before.
     items: list | None = None

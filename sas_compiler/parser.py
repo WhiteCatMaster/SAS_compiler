@@ -1096,6 +1096,13 @@ class Parser:
                 items.append(("newline",))
                 has_control = True
                 continue
+            if tok.type == TokType.OP and tok.value == "#":
+                self.advance()
+                if self.peek().type == TokType.NUMBER:
+                    n = int(float(self.advance().value))
+                    items.append(("line_abs", n))
+                    has_control = True
+                continue
             if tok.type == TokType.IDENT:
                 name = self.advance().value.lower()
                 is_char = False
