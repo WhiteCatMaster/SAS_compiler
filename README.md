@@ -177,7 +177,20 @@ before fitting; same `OUTPUT OUT= P=/R=` support), and `FASTCLUS`
 (k-means clustering via scikit-learn — `VAR var1 var2 ...;` for the
 input columns, `MAXCLUSTERS=n` for k (default 2), and `OUTPUT OUT=`
 for the input rows plus a 1-based `cluster` column, alongside a
-printed cluster-frequency/cluster-means summary), and `TTEST` (via
+printed cluster-frequency/cluster-means summary), `CLUSTER`
+(agglomerative/hierarchical clustering via scipy —
+`VAR var1 var2 ...;` for the input columns, `METHOD=` for the linkage
+method — `AVERAGE` (default), `WARD`/`WARDS`, `SINGLE`, `COMPLETE`, or
+`CENTROID`, mapped onto `scipy.cluster.hierarchy.linkage`'s `method=`
+— and an optional `ID idvar;` to label observations by that
+variable's values instead of row numbers; prints the classic Cluster
+History table, one row per merge step counting down from N-1 to 1
+clusters, showing which two clusters/observations joined and at what
+distance. Scope cut: no `OUTTREE=` dataset — SAS's OUTTREE is a
+fairly involved specialized tree-structure dataset, and real PROC
+CLUSTER users mostly care about the printed Cluster History and/or a
+dendrogram, neither of which needs it; no `OUT=` dataset either, this
+PROC is print-only like `TTEST`/`ANOVA`/`NPAR1WAY`), and `TTEST` (via
 scipy — one-sample against `H0=` (default 0, `VAR var1 var2 ...;`
 alone), two-sample independent groups (`CLASS groupvar; VAR var1
 var2 ...;`, reporting both pooled-variance and Satterthwaite/Welch

@@ -2108,6 +2108,93 @@ def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
     return result
 
 
+# SAS METHOD= name (lowercased) -> scipy.cluster.hierarchy.linkage method=
+# name. WARD and WARDS are both accepted spellings for scipy's "ward".
+_CLUSTER_METHODS = {
+    "average": "average",
+    "ward": "ward",
+    "wards": "ward",
+    "single": "single",
+    "complete": "complete",
+    "centroid": "centroid",
+}
+
+
+def proc_cluster_report(df: pd.DataFrame, cols: list, method: str = "average",
+                         id_var: str | None = None):
+    """PROC CLUSTER: agglomerative/hierarchical clustering (scipy). Prints
+    the classic Cluster History table -- one row per merge step, from N
+    singleton clusters down to 1, showing which two clusters/observations
+    joined and at what distance -- which is exactly what
+    scipy.cluster.hierarchy.linkage returns.
+
+    Scope cuts: no OUTTREE= dataset (SAS's OUTTREE is a fairly involved
+    specialized tree-structure dataset; real PROC CLUSTER users mostly care
+    about the printed Cluster History and/or a dendrogram, neither of which
+    needs it) and no rendered dendrogram image (that's PROC TREE /
+    graphical territory -- scipy.cluster.hierarchy.dendrogram would be the
+    natural next step if someone wants one later). Print-only: returns
+    None, like PROC TTEST/ANOVA/NPAR1WAY."""
+    from scipy.cluster.hierarchy import linkage
+
+    scipy_method = _CLUSTER_METHODS.get(method.lower())
+    if scipy_method is None:
+        raise ValueError(
+            f"PROC CLUSTER: unrecognized METHOD= {method!r}; supported "
+            f"methods are {sorted(_CLUSTER_METHODS)!r}"
+        )
+
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+    if len(clean) < 2:
+        raise ValueError(
+            "PROC CLUSTER: at least 2 non-missing observations are "
+            f"required, found {len(clean)}"
+        )
+
+    if id_var is not None:
+        labels = [str(v) for v in df.loc[mask, id_var].tolist()]
+    else:
+        labels = [str(i) for i in range(1, len(clean) + 1)]
+
+    n = len(clean)
+    Z = linkage(clean.to_numpy(), method=scipy_method)
+
+    print("The CLUSTER Procedure")
+    print(f"Clustering Method: {method.upper()}")
+    print()
+
+    # Running map from synthetic cluster index (n, n+1, ... in merge order,
+    # as scipy numbers newly-formed clusters) -> its display label, so a
+    # later merge that references an earlier-formed cluster can show a
+    # readable name instead of a bare synthetic index.
+    cluster_labels: dict[int, str] = {}
+
+    print("Cluster History")
+    header = f"{'Number of Clusters':>19}   {'Clusters Joined':<33}{'Distance':>12}"
+    print(header)
+    for step, (idx1, idx2, dist, _size) in enumerate(Z):
+        idx1, idx2 = int(idx1), int(idx2)
+        new_cluster_id = n + step
+
+        def _label(idx: int) -> str:
+            if idx < n:
+                return labels[idx]
+            return cluster_labels[idx]
+
+        l1, l2 = _label(idx1), _label(idx2)
+        display_name = f"CL{new_cluster_id - n + 1}"
+        cluster_labels[new_cluster_id] = display_name
+
+        n_clusters_remaining = n - step - 1
+        joined = f"{l1} + {l2}"
+        print(f"{n_clusters_remaining:>19}   {joined:<33}{dist:>12.4f}")
+    print()
+
+    return None
+
+
 def proc_standardize(df: pd.DataFrame, var_names: list, target_mean: float = 0.0,
                       target_std: float = 1.0, replace: bool = False) -> pd.DataFrame:
     """PROC STANDARD: rescale each VAR column to a target mean/std
