@@ -1348,6 +1348,8 @@ class CodeGen:
             self._gen_proc_genmod(proc)
         elif name == "discrim":
             self._gen_proc_discrim(proc)
+        elif name == "hpsplit":
+            self._gen_proc_hpsplit(proc)
         elif name == "robustreg":
             self._gen_proc_robustreg(proc)
         elif name == "mixed":
@@ -2574,6 +2576,83 @@ class CodeGen:
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
         self.w(f"_classified = _r.proc_discrim_fit(_df, {class_var!r}, {var_list!r})")
+        if out:
+            self._store_out(out_raw, out, "_classified")
+
+    def _gen_proc_hpsplit(self, proc: A.ProcStep):
+        """PROC HPSPLIT (decision tree classification via scikit-learn's
+        DecisionTreeClassifier). CLASS names the single categorical
+        response variable (required -- mirrors PROC DISCRIM's CLASS
+        groupvar requirement); MODEL target = x1 x2 ...; (the shared
+        MODEL syntax, parsed via _parse_model_stmt like REG/GLM/PLS)
+        names the response again on its left-hand side -- it must match
+        the CLASS variable -- and the numeric predictors on its
+        right-hand side. Predictors are treated as plain numeric only, no
+        dummy-encoding of categorical predictors (matching REG's
+        plain-numeric baseline; a deliberate scope cut versus
+        GLM/LOGISTIC's CLASS-driven predictor dummy-encoding, which
+        doesn't apply here since trees split numeric thresholds
+        natively).
+
+        MAXDEPTH=n (PROC-statement option) sets the fitted tree's
+        max_depth; omitted, it passes straight through to scikit-learn's
+        own default (None, unlimited depth), matching real SAS HPSPLIT's
+        own default of unlimited depth up to its stopping criteria.
+
+        OUTPUT OUT=/OUT= (dual-form, same handling as PROC DISCRIM/
+        FASTCLUS/PRINCOMP/PLS) gets the fit-subset rows augmented with a
+        predicted-class column named `_INTO_` (mirroring PROC DISCRIM's
+        own naming choice for the same kind of column, not necessarily
+        real SAS HPSPLIT's own output variable naming).
+
+        Like PROC DISCRIM, the classification summary (resubstitution
+        confusion matrix + accuracy) plus a feature-importance table are
+        always printed, whether or not OUT= was given.
+
+        Scope cuts (see runtime.proc_hpsplit_fit's docstring for the
+        runtime-side detail): classification only (a CLASS statement is
+        required; real SAS HPSPLIT also supports regression trees, out of
+        scope here -- omitting CLASS raises a compile error rather than
+        silently doing something else); resubstitution error rate only,
+        no cross-validated pruning / PRUNE= (matching PROC DISCRIM's own
+        scope cut); MAXDEPTH= is the only supported tuning option (no
+        MAXBRANCH=, MINLEAFSIZE=, SPLITCRIT=, ...); no CODE=/RULES=
+        scoring-code export; no tree-plot/ODS graphics output (that's
+        this compiler's separate SGPLOT-based plotting infrastructure,
+        out of scope for this integration)."""
+        dsname = self._resolve_ds(proc)
+        class_clause = self._clause(proc, "class")
+        if not class_clause or len(class_clause) != 1:
+            raise CodegenError(
+                "PROC HPSPLIT requires a CLASS statement with exactly one variable"
+            )
+        class_var = class_clause[0][0]
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC HPSPLIT requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        if y != class_var:
+            raise CodegenError(
+                f"PROC HPSPLIT: MODEL response {y!r} must match the CLASS "
+                f"variable {class_var!r}"
+            )
+        maxdepth_raw = proc.options.get("maxdepth")
+        max_depth = int(maxdepth_raw) if isinstance(maxdepth_raw, str) else None
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_classified = _r.proc_hpsplit_fit(_df, {class_var!r}, {xs!r}, "
+            f"max_depth={max_depth!r})"
+        )
         if out:
             self._store_out(out_raw, out, "_classified")
 
