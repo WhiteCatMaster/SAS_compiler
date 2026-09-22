@@ -2668,6 +2668,110 @@ def proc_cluster_report(df: pd.DataFrame, cols: list, method: str = "average",
     return None
 
 
+def _lifetest_median_survival(summary: pd.DataFrame) -> str:
+    """Median survival time from a SurvfuncRight `.summary()` table: the
+    first Time at which the KM curve's survival probability drops to <=
+    0.5. Returns "." (matching SAS's display for an undefined statistic)
+    when the curve never reaches 50% survival -- e.g. heavy censoring
+    before the midpoint is ever crossed. Real SAS also prints a
+    confidence interval for this; that's a documented scope cut (see
+    proc_lifetest_km's docstring)."""
+    at_or_below = summary[summary["Surv prob"] <= 0.5]
+    if at_or_below.empty:
+        return "."
+    return f"{at_or_below.index[0]:.4f}"
+
+
+def _lifetest_print_km_table(df: pd.DataFrame, time_var: str, status: pd.Series) -> None:
+    """Fit SurvfuncRight on one group and print its KM summary table, a
+    brief N/events/censored line, and the median survival time."""
+    from statsmodels.duration.survfunc import SurvfuncRight
+
+    n = len(df)
+    n_events = int(status.sum())
+    n_censored = n - n_events
+    if n == 0:
+        print("NOTE: no observations in this group -- skipping.")
+        return
+    sf = SurvfuncRight(df[time_var].to_numpy(), status.to_numpy())
+    summary = sf.summary()
+    print(summary.to_string())
+    print()
+    print(f"Total observations: {n}    Events: {n_events}    Censored: {n_censored}")
+    print(f"Median Survival Time: {_lifetest_median_survival(summary)}")
+    print()
+
+
+def proc_lifetest_km(df: pd.DataFrame, time_var: str, censor_var: str,
+                      censor_value: float, strata: str | None = None) -> None:
+    """PROC LIFETEST: Kaplan-Meier survival curve estimation
+    (statsmodels.duration.survfunc.SurvfuncRight), from a
+    `TIME timevar*censorvar(censorvalue);` statement.
+
+    Scope cuts: exactly one CENSOR() value is supported (real SAS allows
+    a list, e.g. CENSOR(0, 2), meaning any of several values marks a
+    censored observation; scoped down to one value here, a documented
+    simplification -- multi-value censoring would need a small parser/
+    codegen extension to pass a list through). No OUTSURV=-style output
+    dataset (print-only, like PROC TTEST/ANOVA/CLUSTER). Median survival
+    time is printed (the first Time at which the curve drops to <= 0.5
+    survival probability, or "." when never reached) but its confidence
+    interval is not computed -- another documented scope cut.
+
+    Event/censoring convention: status = 1 means the event occurred
+    (censor_var != censor_value), status = 0 means censored
+    (censor_var == censor_value) -- this matches SurvfuncRight's
+    expected convention (confirmed against statsmodels docs/behavior:
+    the survival curve only drops at status=1 times).
+
+    Without STRATA, fits one KM curve for the whole dataset. With
+    STRATA, fits one KM curve per distinct stratum value (each printed
+    under its own "--- stratum=value ---" header, mirroring
+    proc_compare_report's BY-group sections) and, when there are 2+
+    distinct stratum values, also runs a log-rank test
+    (statsmodels.duration.survfunc.survdiff) across strata and prints
+    its Chi-Square statistic and p-value."""
+    from statsmodels.duration.survfunc import survdiff
+
+    required = [time_var, censor_var] + ([strata] if strata else [])
+    for col in required:
+        if col not in df.columns:
+            raise ValueError(f"PROC LIFETEST: {col!r} is not a column in the input dataset")
+
+    sub = df.copy()
+    sub[time_var] = pd.to_numeric(sub[time_var], errors="coerce")
+    sub = sub.dropna(subset=required)
+    if sub.empty:
+        raise ValueError(
+            "PROC LIFETEST: no non-missing observations remain after "
+            f"dropping missing {time_var}/{censor_var}"
+            + (f"/{strata}" if strata else "")
+        )
+
+    status = (sub[censor_var] != censor_value).astype(int)
+
+    print("The LIFETEST Procedure")
+    print()
+
+    if not strata:
+        _lifetest_print_km_table(sub, time_var, status)
+        return
+
+    stratum_values = sorted(sub[strata].dropna().unique().tolist(), key=lambda v: str(v))
+    for val in stratum_values:
+        mask = sub[strata] == val
+        print(f"--- {strata}={sas_str(val)} ---")
+        _lifetest_print_km_table(sub[mask], time_var, status[mask])
+
+    if len(stratum_values) >= 2:
+        stat, pvalue = survdiff(
+            sub[time_var].to_numpy(), status.to_numpy(), sub[strata].to_numpy()
+        )
+        print("Log-Rank Test")
+        print(f"Chi-Square: {stat:.4f}    p-value: {pvalue:.4f}")
+        print()
+
+
 def proc_standardize(df: pd.DataFrame, var_names: list, target_mean: float = 0.0,
                       target_std: float = 1.0, replace: bool = False) -> pd.DataFrame:
     """PROC STANDARD: rescale each VAR column to a target mean/std
