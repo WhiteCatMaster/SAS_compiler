@@ -1345,6 +1345,8 @@ class CodeGen:
             self._gen_proc_genmod(proc)
         elif name == "discrim":
             self._gen_proc_discrim(proc)
+        elif name == "robustreg":
+            self._gen_proc_robustreg(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2184,6 +2186,42 @@ class CodeGen:
             f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit}, "
             f"vif={want_vif!r}, selection={selection!r}, slstay={slstay!r}, "
             f"slentry={slentry!r})"
+        )
+        if out:
+            self._store_out(output_clause.get("out_raw"), out, "_scored")
+
+    def _gen_proc_robustreg(self, proc: A.ProcStep):
+        """Robust linear regression via statsmodels RLM -- structurally
+        identical to PROC REG, swapping OLS for M-estimation with Huber's
+        T norm (real SAS ROBUSTREG's default METHOD=). METHOD= is detected
+        from the MODEL clause's raw `/`-suffix text exactly like PROC REG's
+        VIF/SELECTION= options; only METHOD=M is supported (MM/LTS/S are
+        out of scope). OUTPUT OUT= P=/R= mirrors PROC REG exactly, since
+        RLM's fitted result exposes .predict()/.resid the same way OLS's
+        does."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC ROBUSTREG requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        model_opts = model_raw.split("/", 1)[1] if "/" in model_raw else ""
+        method_m = re.search(r"(?i)\bmethod\s*=\s*(\w+)", model_opts)
+        method = method_m.group(1).lower() if method_m else "m"
+        if method != "m":
+            raise CodegenError(
+                f"PROC ROBUSTREG: unsupported METHOD={method.upper()}; "
+                "only METHOD=M (M-estimation with Huber's T norm) is supported"
+            )
+        output_clause = self._clause(proc, "output")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        out_stats_lit = "None"
+        out = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_stats_lit = repr(self._output_stat_dict(output_clause))
+        self.w(
+            f"_scored = _r.proc_robustreg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit})"
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
