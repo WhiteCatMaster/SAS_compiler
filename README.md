@@ -227,11 +227,23 @@ alone), two-sample independent groups (`CLASS groupvar; VAR var1
 var2 ...;`, reporting both pooled-variance and Satterthwaite/Welch
 t-test results), or paired (`PAIRED var1*var2 ...;`, one paired
 t-test per pair); prints N/Mean/StdDev/StdErr and the t/df/Pr>|t|
-results, no `OUT=` dataset), and `ANOVA` (one-way only — one `CLASS`
-variable and `MODEL y = classvar;` — via scipy's `f_oneway`; prints
-Class Level Information plus the classic Source/DF/Sum of
+results, no `OUT=` dataset), and `ANOVA` (one-way with exactly one
+`CLASS` variable and `MODEL y = classvar;` — via scipy's `f_oneway`;
+prints Class Level Information plus the classic Source/DF/Sum of
 Squares/Mean Square/F Value/Pr > F table, R-Square, Coeff Var, and
-Root MSE, no `OUT=` dataset), and `NPAR1WAY` (`CLASS groupvar; VAR
+Root MSE, no `OUT=` dataset; two-way and N-way with 2+ `CLASS`
+variables and a `MODEL` naming main-effect terms (`a`) and/or
+`*`-joined interaction terms (`a*b`, `a*b*c`, ...) — every MODEL term
+must reference only declared `CLASS` variables — via a statsmodels
+formula (`C(a) + C(b) + C(a):C(b)`, intercept included, matching real
+PROC ANOVA's default parameterization) fit with
+`statsmodels.formula.api.ols` and printed with
+`statsmodels.stats.anova.anova_lm(..., typ=2)`; Type II sums of
+squares is a documented simplification — real PROC ANOVA is itself
+documented as requiring a *balanced* design, for which Type I/II/III
+SS all agree, so Type II stands in without attempting to replicate
+SAS's exact SS partitioning for unbalanced data; no `OUT=` dataset
+here either), and `NPAR1WAY` (`CLASS groupvar; VAR
 var1 var2 ...;`, one report block per `VAR`; always prints a
 Wilcoxon-scores rank-sums-by-group table, then a Wilcoxon rank-sum
 test — via scipy's `mannwhitneyu` — when `CLASS` has exactly 2

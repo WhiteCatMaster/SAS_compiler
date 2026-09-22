@@ -2069,36 +2069,57 @@ class CodeGen:
         )
 
     def _gen_proc_anova(self, proc: A.ProcStep):
-        """One-way ANOVA only: exactly one CLASS variable and a MODEL
-        statement whose right-hand side is that same variable."""
+        """One-way ANOVA (exactly one CLASS variable and a MODEL statement
+        whose right-hand side is that same variable) is handled by the
+        original, untouched code path below, ending in
+        proc_anova_oneway_report. Two-way and N-way ANOVA (2+ CLASS
+        variables) is routed to the newer proc_anova_multiway_report path,
+        which supports main-effect (`a`) and `*`-interaction (`a*b`,
+        `a*b*c`, ...) MODEL terms."""
         dsname = self._resolve_ds(proc)
         class_clause = self._clause(proc, "class")
         if not class_clause:
             raise CodegenError("PROC ANOVA requires a CLASS statement")
-        if len(class_clause) != 1:
-            raise CodegenError(
-                "PROC ANOVA: multi-way ANOVA (more than one CLASS variable) "
-                "is not supported here; only one-way ANOVA is supported"
-            )
-        class_var = class_clause[0][0]
+        if len(class_clause) == 1:
+            # -- one-way path: unchanged from before multi-way support --
+            class_var = class_clause[0][0]
+            model_raw = self._clause(proc, "model")
+            if not model_raw:
+                raise CodegenError("PROC ANOVA requires a MODEL statement")
+            y, xs = self._parse_model_stmt(model_raw)
+            if len(xs) != 1:
+                raise CodegenError(
+                    "PROC ANOVA: multi-way ANOVA (more than one variable on the "
+                    "right-hand side of MODEL) is not supported here; only "
+                    "one-way ANOVA (MODEL y = class_var;) is supported"
+                )
+            if xs[0] != class_var:
+                raise CodegenError(
+                    f"PROC ANOVA: MODEL right-hand side variable {xs[0]!r} must "
+                    f"match the CLASS variable {class_var!r} for one-way ANOVA"
+                )
+            self.w(f"_df = {self._proc_src(proc, dsname)}")
+            self._gen_proc_filters(proc)
+            self.w(f"_r.proc_anova_oneway_report(_df, {y!r}, {class_var!r})")
+            return
+
+        # -- multi-way path: 2+ CLASS variables --
+        class_vars = [n for n, _ in class_clause]
         model_raw = self._clause(proc, "model")
         if not model_raw:
             raise CodegenError("PROC ANOVA requires a MODEL statement")
         y, xs = self._parse_model_stmt(model_raw)
-        if len(xs) != 1:
-            raise CodegenError(
-                "PROC ANOVA: multi-way ANOVA (more than one variable on the "
-                "right-hand side of MODEL) is not supported here; only "
-                "one-way ANOVA (MODEL y = class_var;) is supported"
-            )
-        if xs[0] != class_var:
-            raise CodegenError(
-                f"PROC ANOVA: MODEL right-hand side variable {xs[0]!r} must "
-                f"match the CLASS variable {class_var!r} for one-way ANOVA"
-            )
+        for term in xs:
+            for v in term.split("*"):
+                if v not in class_vars:
+                    raise CodegenError(
+                        f"PROC ANOVA: MODEL term {term!r} references {v!r}, "
+                        f"which is not a declared CLASS variable "
+                        f"({', '.join(class_vars)})"
+                    )
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
-        self.w(f"_r.proc_anova_oneway_report(_df, {y!r}, {class_var!r})")
+        self.w(f"_r.proc_anova_multiway_report(_df, {y!r}, {xs!r}, {class_vars!r})")
 
     def _gen_proc_npar1way(self, proc: A.ProcStep):
         """Wilcoxon rank-sum (2-level CLASS) / Kruskal-Wallis (k>2-level

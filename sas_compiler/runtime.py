@@ -1824,6 +1824,72 @@ def proc_anova_oneway_report(df: pd.DataFrame, y: str, group_var: str):
     return None
 
 
+def proc_anova_multiway_report(df: pd.DataFrame, y: str, terms: list, class_vars: list):
+    """Print a PROC ANOVA-style two-way/N-way ANOVA report for a MODEL
+    statement naming 2+ CLASS variables. `terms` is the raw MODEL
+    right-hand-side token list as returned by _parse_model_stmt, e.g.
+    ["a", "b", "a*b"] for `model y = a b a*b;` -- each bare token is a
+    main-effect term, each `*`-joined token (e.g. "a*b", "a*b*c") is an
+    interaction term. Every term's variable(s) are required (by the caller,
+    at codegen time) to be among `class_vars`.
+
+    Builds a statsmodels formula translating each SAS main-effect term `a`
+    to `C(a)` and each SAS interaction term `a*b` to the statsmodels pure-
+    interaction operator `C(a):C(b)` (not `*`, which in statsmodels/patsy
+    formula syntax also implicitly adds the main effects -- SAS's MODEL
+    statement already lists main effects and interactions as separate,
+    explicit terms, so `:` is the correct translation). An intercept is
+    included, matching real PROC ANOVA's default parameterization (no
+    `- 1` suppression). Fits with statsmodels.formula.api.ols and prints
+    statsmodels.stats.anova.anova_lm(model, typ=2) -- Type II sums of
+    squares. This is a documented simplification: real PROC ANOVA requires
+    a balanced design (unlike PROC GLM, which defaults to Type III SS for
+    unbalanced designs), and for a balanced design Type I/II/III SS all
+    agree, so Type II is a reasonable, defensible stand-in here rather than
+    attempting to exactly replicate SAS's SS partitioning for unbalanced
+    data. Returns None (print-only, like proc_anova_oneway_report -- no
+    OUT= dataset)."""
+    from statsmodels.formula.api import ols
+    from statsmodels.stats.anova import anova_lm
+
+    used_vars = sorted({v for term in terms for v in term.split("*")})
+
+    print("The ANOVA Procedure")
+    print()
+    print("Class Level Information")
+    print(f"  Class     Levels    Values")
+    for v in class_vars:
+        levels = sorted(df[v].dropna().astype(str).unique().tolist())
+        print(f"  {v:<10}{len(levels):<10}{' '.join(levels)}")
+    print()
+
+    sub = df[used_vars + [y]].copy()
+    sub[y] = pd.to_numeric(sub[y], errors="coerce")
+    sub = sub.dropna(subset=[y] + used_vars)
+    for v in used_vars:
+        sub[v] = sub[v].astype(str)
+
+    n = len(sub)
+    print(f"Number of observations: {n}")
+    print()
+
+    def _translate(term: str) -> str:
+        return ":".join(f"C({v})" for v in term.split("*"))
+
+    formula = f"{y} ~ " + " + ".join(_translate(t) for t in terms)
+
+    print("Dependent Variable: " + y)
+    print("Model: " + formula)
+    print()
+
+    model = ols(formula, data=sub).fit()
+    table = anova_lm(model, typ=2)
+    print(table)
+    print()
+
+    return None
+
+
 def proc_npar1way_report(df: pd.DataFrame, var_names: list, group_var: str):
     """Print a PROC NPAR1WAY-style report for each VAR: a Wilcoxon-scores
     (rank-sums-by-group) table, then a Wilcoxon rank-sum test (via

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from scipy import stats as _stats
 
@@ -78,7 +80,11 @@ def test_anova_model_must_match_class_variable(capsys):
         run_sas(src)
 
 
-def test_anova_too_many_class_variables(capsys):
+def test_anova_two_class_vars_with_single_model_term_now_supported(capsys):
+    """Two-way ANOVA support means 2+ CLASS variables is no longer a blanket
+    rejection: a MODEL statement using only one of the declared CLASS
+    variables (a partial main-effect model) is legitimate SAS and routes
+    through the new multi-way path successfully."""
     src = """
     data one;
       input grp $ grp2 $ y;
@@ -94,7 +100,29 @@ def test_anova_too_many_class_variables(capsys):
       model y = grp;
     run;
     """
-    with pytest.raises(CodegenError, match="multi-way ANOVA"):
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "The ANOVA Procedure" in out
+    assert "C(grp)" in out
+
+
+def test_anova_model_term_references_undeclared_class_variable(capsys):
+    src = """
+    data one;
+      input grp $ grp2 $ y;
+      datalines;
+    A x 1
+    A x 2
+    B y 5
+    B y 6
+    ;
+    run;
+    proc anova data=one;
+      class grp grp2;
+      model y = grp other;
+    run;
+    """
+    with pytest.raises(CodegenError, match="not a declared CLASS variable"):
         run_sas(src)
 
 
@@ -135,3 +163,53 @@ def test_anova_requires_at_least_two_levels(capsys):
     """
     with pytest.raises(ValueError, match="at least 2"):
         run_sas(src)
+
+
+def test_anova_twoway_with_interaction(capsys):
+    """Two CLASS variables with MODEL y = a b a*b;: a has a strong main
+    effect, b a weaker main effect, and a mild a*b interaction. Checks the
+    printed anova_lm table has the expected row labels and that the C(a)
+    row's F is large / p is tiny (matching its strong true effect)."""
+    resid_cycle = [0.1, -0.2, 0.05, -0.1, 0.15]
+    a_eff = {"A1": 0.0, "A2": 20.0}
+    b_eff = {"B1": 0.0, "B2": 3.0}
+    lines = []
+    for a in ["A1", "A2"]:
+        for b in ["B1", "B2"]:
+            for i in range(5):
+                inter = 1.5 if (a == "A2" and b == "B2") else 0.0
+                y = a_eff[a] + b_eff[b] + inter + resid_cycle[i]
+                lines.append(f"{a} {b} {y}")
+    datalines = "\n".join(lines)
+
+    src = f"""
+    data one;
+      input a $ b $ y;
+      datalines;
+    {datalines}
+    ;
+    run;
+    proc anova data=one;
+      class a b;
+      model y = a b a*b;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+
+    assert "The ANOVA Procedure" in out
+    assert "Class Level Information" in out
+    assert "Model: y ~ C(a) + C(b) + C(a):C(b)" in out
+    for label in ("C(a)", "C(b)", "C(a):C(b)", "Residual"):
+        assert label in out
+
+    m = re.search(
+        r"^C\(a\)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*$",
+        out,
+        re.M,
+    )
+    assert m, f"could not find C(a) row in output:\n{out}"
+    f_val = float(m.group(3))
+    p_val = float(m.group(4))
+    assert f_val > 1000
+    assert p_val < 1e-10
