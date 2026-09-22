@@ -310,11 +310,22 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
 - **PROC FCMP** functions support scalar numeric/character parameters,
   assignment, `IF`/`THEN`/`ELSE`, and `RETURN(expr)` in their bodies (the
   same DATA-step statement grammar, minus anything dataset-shaped like
-  `SET`/arrays-as-parameters); there's no `OUTLIB=`-backed persistent
-  package dataset (a defined function is simply callable from any later
-  step in the same compiled program, `OPTIONS CMPLIB=` is accepted but
-  not required), no `ARRAY` parameters, and no `PROC PROTO`/external
-  C-function calls.
+  `SET`); there's no `OUTLIB=`-backed persistent package dataset (a
+  defined function is simply callable from any later step in the same
+  compiled program, `OPTIONS CMPLIB=` is accepted but not required), and
+  no `PROC PROTO`/external C-function calls. **`ARRAY` parameters** are
+  supported for the common 1-D numeric case only -- declare them
+  `FUNCTION name(arr[*], ...)` (or `{*}`), index with `arr{i}`/`arr[i]`,
+  and `DIM(arr)` returns the element count; there's no `$` character
+  array parameter, no fixed-size (`arr[10]`) or multi-dimensional array
+  parameter, and no `HBOUND`/`LBOUND` on one (bounds aren't tracked for
+  a plain parameter). At the call site the argument must be a bare
+  name of an `ARRAY` currently declared in the calling DATA step. The
+  array is passed **by value**: its current element values are copied
+  into a fresh list when the function is called, so assignments to
+  `arr{i}` inside the function body do not propagate back to the
+  caller's SAS array once the call returns -- there's no general
+  pass-by-reference support.
 - **Multi-dimensional ARRAYs** are stored flat in row-major order and
   tested through 3 dimensions (`array c{2,2,2} ...;`); there is no
   declared cap, but going much higher than that is unverified. Both a
