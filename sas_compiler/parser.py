@@ -229,10 +229,10 @@ class Parser:
                 self.advance()
         self.skip_to_semi()
 
-        if dest not in ("html", "rtf"):
-            # only HTML and RTF are implemented; every other ODS
-            # destination/form (LISTING, PDF, _ALL_, SELECT/EXCLUDE, ...)
-            # is safely ignored rather than raising a parse error.
+        if dest not in ("html", "rtf", "pdf"):
+            # only HTML, RTF and PDF are implemented; every other ODS
+            # destination/form (LISTING, _ALL_, SELECT/EXCLUDE, ...) is
+            # safely ignored rather than raising a parse error.
             return None
         if is_close:
             return A.OdsStmt(action="close", destination=dest)

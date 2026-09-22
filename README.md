@@ -211,22 +211,27 @@ built-in format families are `COMMAw.d`, `DOLLARw.d`, `PERCENTw.d`,
 (`value $gender "M"="Male" ... other="Unknown";`) — referenced the same
 way via `FORMAT var fmtname.` or `PUT(var, fmtname.)`.
 
-**ODS:** `ODS HTML FILE="report.html"; ... ODS HTML CLOSE;` and
-`ODS RTF FILE="report.rtf"; ... ODS RTF CLOSE;` redirect everything any
+**ODS:** `ODS HTML FILE="report.html"; ... ODS HTML CLOSE;`,
+`ODS RTF FILE="report.rtf"; ... ODS RTF CLOSE;`, and
+`ODS PDF FILE="report.pdf"; ... ODS PDF CLOSE;` redirect everything any
 PROC step would otherwise print (between the open/close pair) into a
 report file instead of the console — this works for every PROC
 automatically, via stdout redirection, not by special-casing each one.
-HTML and RTF each track their own open/closed state independently, so
-both can be open at once (each capturing the same printed output into
-its own file); closing one leaves the other open. HTML output detects
-blocks of `to_string()`-style whitespace-aligned tabular text and
-renders them as real `<table>`/`<tr>`/`<td>` markup with light CSS
-borders/padding, falling back to a plain `<pre>` block for narrow
-output or anything that doesn't parse as a table; RTF output is a
-minimal valid `{\rtf1 ...}` document with the captured text as
-monospace paragraphs. Other ODS destinations/statements (`LISTING`,
-`PDF`, `SELECT`/`EXCLUDE`, `_ALL_`, ...) are parsed and safely ignored
-rather than raising an error.
+HTML, RTF and PDF each track their own open/closed state independently,
+so any combination can be open at once (each capturing the same
+printed output into its own file); closing one leaves the others open.
+HTML output detects blocks of `to_string()`-style whitespace-aligned
+tabular text and renders them as real `<table>`/`<tr>`/`<td>` markup
+with light CSS borders/padding, falling back to a plain `<pre>` block
+for narrow output or anything that doesn't parse as a table; RTF
+output is a minimal valid `{\rtf1 ...}` document with the captured
+text as monospace paragraphs. PDF output uses the same table-detection
+heuristic as HTML — table-shaped chunks render as a real `reportlab`
+`Table` flowable with a light grid and shaded header row, everything
+else as monospace preformatted text — built into a PDF via
+`SimpleDocTemplate`. Other ODS destinations/statements (`LISTING`,
+`SELECT`/`EXCLUDE`, `_ALL_`, ...) are parsed and safely ignored rather
+than raising an error.
 
 ## Known limitations
 
@@ -306,12 +311,13 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   stored value.
 - **ODS** table detection is heuristic (whitespace-aligned columns with
   a consistent field count across the first couple of lines); output
-  that doesn't match that shape renders as `<pre>` narrative text
-  instead of a `<table>` even if a human would call it tabular. RTF
+  that doesn't match that shape renders as `<pre>`/monospace narrative
+  text instead of a table even if a human would call it tabular. RTF
   output is plain monospace paragraphs, not real RTF tables. Re-opening
   the *same* destination while it's already open closes and writes the
-  previous one first rather than erroring or interleaving (HTML and RTF
-  are independent destinations and can be open at the same time).
+  previous one first rather than erroring or interleaving (HTML, RTF
+  and PDF are independent destinations and can all be open at the same
+  time).
 - PROC steps beyond `PRINT`/`CONTENTS`/`SORT`/`MEANS`/`SUMMARY`/`FREQ`/`APPEND`/
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
