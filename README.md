@@ -174,8 +174,12 @@ statsmodels — full summary with R², F-stat, coefficient table,
 `OUTPUT OUT= P=/R=` for predicted values / residuals, and a
 `MODEL ... / VIF;` option that prints a per-predictor Variance
 Inflation Factor multicollinearity table), `LOGISTIC`
-(binary logistic regression via statsmodels — summary, odds ratios, and
-`OUTPUT OUT= P=` for predicted probabilities), `GLM` (OLS via
+(binary logistic regression via statsmodels — summary, odds ratios, an
+"Association of Predicted Probabilities and Observed Responses" section
+with the `c` statistic (concordance / ROC AUC, via scikit-learn) and
+Somers' D, and `OUTPUT OUT= P=` for predicted probabilities; scope cut:
+the Percent Concordant/Discordant/Tied, Gamma, and Tau-a figures real
+PROC LOGISTIC also prints there are not computed), `GLM` (OLS via
 statsmodels like `REG`, plus a `CLASS var1 var2;` statement that
 dummy-encodes categorical predictors — drop-first indicator columns —
 before fitting; same `OUTPUT OUT= P=/R=` support), and `FASTCLUS`
