@@ -1349,6 +1349,8 @@ class CodeGen:
             self._gen_proc_robustreg(proc)
         elif name == "mixed":
             self._gen_proc_mixed(proc)
+        elif name == "timeseries":
+            self._gen_proc_timeseries(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2577,6 +2579,62 @@ class CodeGen:
         self.w(f"_fcst = _r.proc_arima_fit(_df, {var!r}, order={order!r}, lead={lead!r})")
         if forecast and forecast.get("out"):
             self._store_out(forecast.get("out_raw"), forecast["out"], "_fcst")
+
+    def _gen_proc_timeseries(self, proc: A.ProcStep):
+        """PROC TIMESERIES, scoped down hard to decomposing an already
+        regularly-spaced series (one row per period, in row order). Real
+        SAS TIMESERIES is primarily about *accumulating* irregular
+        transaction-level data up to a regular interval via
+        `ID date INTERVAL=month;` before optionally decomposing it -- that
+        accumulation machinery is entirely out of scope here: no ID, no
+        INTERVAL=, no accumulation statistics. Also out of scope: CORR,
+        SPECTRA, SEASON, TREND statements, and OUTDECOMP='s precise
+        per-component column layout (see proc_timeseries_decomp's own
+        docstring for the columns this compiler produces instead).
+
+        VAR names exactly one series to decompose (real SAS can decompose
+        several VAR variables in one run, each in its own section; this
+        compiler requires exactly one, an explicit scope cut).
+        DECOMP is required -- matching real SAS's requirement that
+        decomposition be explicitly requested -- and is detected by
+        scanning proc.clauses directly for a "decomp"-tagged tuple (the
+        parser's generic catch-all clause rule already captures a bare
+        `DECOMP;` this way; no dedicated parser support is needed).
+        PERIOD= is a PROC-statement option (our own default of 12 when
+        omitted -- real SAS derives the natural period from INTERVAL=,
+        which isn't implemented here)."""
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause or len(var_clause) != 1:
+            raise CodegenError("PROC TIMESERIES requires exactly one VAR variable")
+        var = var_clause[0][0]
+
+        has_decomp = any(k == "decomp" for k, _ in proc.clauses)
+        if not has_decomp:
+            raise CodegenError("PROC TIMESERIES requires a DECOMP statement")
+
+        period = int(proc.options.get("period", 12))
+        model = proc.options.get("model", "additive")
+        if not isinstance(model, str):
+            model = "additive"
+
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_decomp = _r.proc_timeseries_decomp(_df, {var!r}, period={period!r}, model={model.lower()!r})"
+        )
+        if out:
+            self._store_out(out_raw, out, "_decomp")
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}

@@ -381,7 +381,29 @@ intercept variance component) via `model.summary()` like
 `INTERCEPT` is rejected with a compile error rather than being
 mishandled), no `REPEATED` statement/covariance structures, no `CLASS`,
 and no `OUTPUT OUT=`/`LSMEANS` — `MIXED` is print-only, like
-`TTEST`/`ANOVA`/`CLUSTER`/`GENMOD`).
+`TTEST`/`ANOVA`/`CLUSTER`/`GENMOD`), and
+`TIMESERIES` (seasonal/trend decomposition via statsmodels
+`seasonal_decompose` — scoped down hard to decomposing an already
+regularly-spaced series, one row per period in row order: `VAR y;`
+(exactly one variable — real SAS can decompose several `VAR` variables
+per run, each in its own section; this compiler requires exactly one)
+plus a required `DECOMP;` statement (mirroring real SAS's requirement
+that decomposition be explicitly requested); a `PERIOD=` PROC-statement
+option gives the seasonal period length, defaulting to `12` (our own
+default — real SAS instead derives the natural period from `INTERVAL=`,
+which isn't implemented here). Prints "The TIMESERIES Procedure" with
+the head of each recovered trend/seasonal/residual component, and an
+optional `OUT=`/`OUTPUT OUT=` dataset gets `observed`/`trend`/
+`seasonal`/`residual` columns (this compiler's own names, not real SAS
+`OUTDECOMP=`'s precise per-component column layout) aligned to the
+input rows, with `trend`/`residual` `NaN` at the series' edges (expected
+`seasonal_decompose` behavior). Scope cuts: no `ID`/`INTERVAL=`
+accumulation of irregular transaction-level data (real SAS TIMESERIES'
+primary purpose) — only an already-regular series is supported; no
+`CORR`/`SPECTRA`/`SEASON`/`TREND` statements; no `OUTDECOMP=`-precise
+column layout (see above). Decomposition defaults to additive (the
+simpler, more broadly-applicable choice), with a `MODEL=multiplicative`
+PROC-statement option to switch to multiplicative decomposition).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
 `GENMOD`, `ROBUSTREG`, and `MIXED`.
@@ -551,7 +573,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED` raise a clear
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/`TIMESERIES` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
