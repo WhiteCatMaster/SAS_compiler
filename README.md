@@ -167,8 +167,14 @@ before fitting; same `OUTPUT OUT= P=/R=` support), and `FASTCLUS`
 (k-means clustering via scikit-learn — `VAR var1 var2 ...;` for the
 input columns, `MAXCLUSTERS=n` for k (default 2), and `OUTPUT OUT=`
 for the input rows plus a 1-based `cluster` column, alongside a
-printed cluster-frequency/cluster-means summary). `MODEL y = x1 x2
-...;` is the shared syntax for `REG`, `LOGISTIC`, and `GLM`.
+printed cluster-frequency/cluster-means summary), and `TTEST` (via
+scipy — one-sample against `H0=` (default 0, `VAR var1 var2 ...;`
+alone), two-sample independent groups (`CLASS groupvar; VAR var1
+var2 ...;`, reporting both pooled-variance and Satterthwaite/Welch
+t-test results), or paired (`PAIRED var1*var2 ...;`, one paired
+t-test per pair); prints N/Mean/StdDev/StdErr and the t/df/Pr>|t|
+results, no `OUT=` dataset). `MODEL y = x1 x2 ...;` is the shared
+syntax for `REG`, `LOGISTIC`, and `GLM`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref

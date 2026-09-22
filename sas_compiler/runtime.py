@@ -1323,6 +1323,111 @@ def proc_corr_with_report(df: pd.DataFrame, cols: list, with_cols: list):
     return out
 
 
+def _ttest_stat_line(s: pd.Series) -> tuple:
+    """N/Mean/StdDev/StdErr for a numeric Series, SAS-TTEST style."""
+    n = len(s)
+    mean = s.mean() if n else float("nan")
+    std = s.std() if n > 1 else float("nan")
+    se = std / (n ** 0.5) if n > 1 else float("nan")
+    return n, mean, std, se
+
+
+def _ttest_welch_df(a: pd.Series, b: pd.Series) -> float:
+    """Welch-Satterthwaite approximate degrees of freedom for two samples."""
+    n1, n2 = len(a), len(b)
+    if n1 < 2 or n2 < 2:
+        return float("nan")
+    v1, v2 = a.var(ddof=1), b.var(ddof=1)
+    num = (v1 / n1 + v2 / n2) ** 2
+    den = (v1 / n1) ** 2 / (n1 - 1) + (v2 / n2) ** 2 / (n2 - 1)
+    return num / den if den else float("nan")
+
+
+def proc_ttest_report(df: pd.DataFrame, var_names: list, class_var: str | None,
+                        paired_pairs: list, h0: float = 0.0):
+    """Print a PROC TTEST-style report and return None (real PROC TTEST
+    has no OUT= dataset either). Exactly one of the three SAS TTEST modes
+    is used, based on what's given:
+      - `paired_pairs` non-empty: paired t-test on each (v1, v2) difference.
+      - `class_var` given (with `var_names`): two-sample (independent
+        groups) t-test, reporting both the pooled-variance and
+        Satterthwaite (Welch) results, like real PROC TTEST.
+      - otherwise: one-sample t-test of each var against H0 (default 0).
+    """
+    from scipy import stats as _stats
+
+    print("The TTEST Procedure")
+
+    if paired_pairs:
+        print("Paired t-test")
+        print()
+        for v1, v2 in paired_pairs:
+            sub = df[[v1, v2]].apply(pd.to_numeric, errors="coerce").dropna()
+            diff = sub[v1] - sub[v2]
+            n, mean, std, se = _ttest_stat_line(diff)
+            print(f"Difference: {v1} - {v2}")
+            print(f"  N          {n}")
+            print(f"  Mean       {mean:.4f}")
+            print(f"  Std Dev    {std:.4f}")
+            print(f"  Std Err    {se:.4f}")
+            if n > 1:
+                t, p = _stats.ttest_rel(sub[v1], sub[v2])
+                print(f"  DF         {n - 1}")
+                print(f"  t Value    {t:.4f}")
+                print(f"  Pr > |t|   {p:.4f}")
+            print()
+        return None
+
+    if class_var:
+        print(f"Class: {class_var}")
+        print()
+        levels = sorted(df[class_var].dropna().unique().tolist())
+        if len(levels) != 2:
+            raise ValueError(
+                f"PROC TTEST: CLASS variable {class_var!r} must have exactly 2 "
+                f"non-missing levels, found {len(levels)}: {levels!r}"
+            )
+        for v in var_names:
+            sub = df[[class_var, v]].copy()
+            sub[v] = pd.to_numeric(sub[v], errors="coerce")
+            sub = sub.dropna()
+            print(f"Variable: {v}")
+            groups = {}
+            for lvl in levels:
+                s = sub.loc[sub[class_var] == lvl, v]
+                groups[lvl] = s
+                n, mean, std, se = _ttest_stat_line(s)
+                print(f"  {str(lvl):<12} N={n:<6} Mean={mean:.4f}  "
+                      f"StdDev={std:.4f}  StdErr={se:.4f}")
+            a, b = groups[levels[0]], groups[levels[1]]
+            t_eq, p_eq = _stats.ttest_ind(a, b, equal_var=True)
+            df_eq = len(a) + len(b) - 2
+            t_un, p_un = _stats.ttest_ind(a, b, equal_var=False)
+            df_un = _ttest_welch_df(a, b)
+            print(f"  Pooled        t={t_eq:.4f}  DF={df_eq}          Pr > |t|={p_eq:.4f}")
+            print(f"  Satterthwaite t={t_un:.4f}  DF={df_un:.4f}  Pr > |t|={p_un:.4f}")
+            print()
+        return None
+
+    print(f"H0: Mean = {h0}")
+    print()
+    for v in var_names:
+        s = pd.to_numeric(df[v], errors="coerce").dropna()
+        n, mean, std, se = _ttest_stat_line(s)
+        print(f"Variable: {v}")
+        print(f"  N          {n}")
+        print(f"  Mean       {mean:.4f}")
+        print(f"  Std Dev    {std:.4f}")
+        print(f"  Std Err    {se:.4f}")
+        if n > 1:
+            t, p = _stats.ttest_1samp(s, h0)
+            print(f"  DF         {n - 1}")
+            print(f"  t Value    {t:.4f}")
+            print(f"  Pr > |t|   {p:.4f}")
+        print()
+    return None
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual

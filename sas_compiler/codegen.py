@@ -1255,6 +1255,8 @@ class CodeGen:
             self._gen_proc_sgplot(proc)
         elif name == "compare":
             self._gen_proc_compare(proc)
+        elif name == "ttest":
+            self._gen_proc_ttest(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -1944,6 +1946,26 @@ class CodeGen:
             out = normalize_dsname(out)
             self.w("_corr_out = _corr.reset_index().rename(columns={'index': '_name_'})")
             self._store_out(raw_out, out, "_corr_out")
+
+    def _gen_proc_ttest(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        class_clause = self._clause(proc, "class")
+        paired_clause = self._clause(proc, "paired")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        var_names = [n for n, _ in var_clause] if var_clause else []
+        class_var = class_clause[0][0] if class_clause else None
+        paired_pairs = paired_clause if paired_clause else []
+        h0_raw = proc.options.get("h0", 0)
+        try:
+            h0 = float(h0_raw)
+        except (TypeError, ValueError):
+            h0 = 0.0
+        self.w(
+            f"_r.proc_ttest_report(_df, {var_names!r}, {class_var!r}, "
+            f"{paired_pairs!r}, h0={h0!r})"
+        )
 
     def _gen_proc_reg(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
