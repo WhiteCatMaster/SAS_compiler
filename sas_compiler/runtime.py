@@ -1892,18 +1892,92 @@ def proc_npar1way_report(df: pd.DataFrame, var_names: list, group_var: str):
     return None
 
 
+def _proc_reg_backward_select(sub: pd.DataFrame, y: str, xs: list, slstay: float):
+    """Greedily drop the highest-p-value predictor while it exceeds
+    `slstay`, refitting OLS each time. Stops at one remaining predictor
+    (never drops down to an intercept-only model) or when every
+    remaining predictor's p-value is <= slstay. Returns (final_xs, model, X)."""
+    import statsmodels.api as sm
+
+    current = list(xs)
+    while len(current) > 1:
+        X = sm.add_constant(sub[current])
+        model = sm.OLS(sub[y], X).fit()
+        pvals = model.pvalues.drop("const", errors="ignore")
+        worst = pvals.idxmax()
+        worst_p = pvals[worst]
+        if worst_p <= slstay:
+            break
+        print(f"Step: removed {worst!r} (p={worst_p:.4f})")
+        current.remove(worst)
+    X = sm.add_constant(sub[current])
+    model = sm.OLS(sub[y], X).fit()
+    return current, model, X
+
+
+def _proc_reg_forward_select(sub: pd.DataFrame, y: str, xs: list, slentry: float):
+    """Greedily add whichever not-yet-included predictor gives the lowest
+    entry p-value, while that p-value is below `slentry`, refitting OLS
+    each time. Stops when no candidate qualifies or all predictors are
+    in. Returns (final_xs, model, X)."""
+    import statsmodels.api as sm
+
+    current: list = []
+    remaining = list(xs)
+    while remaining:
+        best_name = None
+        best_p = None
+        for cand in remaining:
+            trial_xs = current + [cand]
+            X = sm.add_constant(sub[trial_xs])
+            trial_model = sm.OLS(sub[y], X).fit()
+            p = trial_model.pvalues[cand]
+            if best_p is None or p < best_p:
+                best_p = p
+                best_name = cand
+        if best_p is None or best_p >= slentry:
+            break
+        print(f"Step: added {best_name!r} (p={best_p:.4f})")
+        current.append(best_name)
+        remaining.remove(best_name)
+    if current:
+        X = sm.add_constant(sub[current])
+    else:
+        # No predictor qualified: report an intercept-only model.
+        X = pd.DataFrame({"const": 1.0}, index=sub.index)
+    model = sm.OLS(sub[y], X).fit()
+    return current, model, X
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None,
-                  vif: bool = False):
+                  vif: bool = False, selection: str | None = None,
+                  slstay: float = 0.05, slentry: float = 0.05):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual
     columns per `out_stats` (e.g. {'p': ['pred'], 'r': ['resid']}). When
     `vif` is true, also print a Variance Inflation Factor table (one row
-    per predictor in `xs`) after the summary."""
+    per predictor in `xs`) after the summary.
+
+    `selection` of None (the default) fits the full model with all of
+    `xs`, exactly as before. `selection="backward"` or `"forward"` runs
+    a greedy stepwise-style search (SAS's SELECTION=BACKWARD/FORWARD)
+    against `slstay`/`slentry` thresholds, printing a short log line per
+    elimination/addition step, and then reports the *final* selected
+    model through the same summary/VIF/out_stats tail as the default
+    path. SELECTION=STEPWISE is rejected earlier, at compile time."""
     import statsmodels.api as sm
 
     sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
-    X = sm.add_constant(sub[xs])
-    model = sm.OLS(sub[y], X).fit()
+
+    if selection == "backward":
+        final_xs, model, X = _proc_reg_backward_select(sub, y, xs, slstay)
+    elif selection == "forward":
+        final_xs, model, X = _proc_reg_forward_select(sub, y, xs, slentry)
+    else:
+        final_xs = xs
+        X = sm.add_constant(sub[xs])
+        model = sm.OLS(sub[y], X).fit()
+
     print(model.summary())
     if vif:
         from statsmodels.stats.outliers_influence import variance_inflation_factor
@@ -1912,8 +1986,8 @@ def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = No
         print("Variance Inflation Factor")
         print(f"  {'Variable':<16}{'VIF':>12}")
         # X = [const, x1, x2, ...] (add_constant places the constant first),
-        # so predictor xs[i] is column index i + 1 in X.
-        for i, name in enumerate(xs):
+        # so predictor final_xs[i] is column index i + 1 in X.
+        for i, name in enumerate(final_xs):
             try:
                 v = variance_inflation_factor(X.values, i + 1)
             except Exception:

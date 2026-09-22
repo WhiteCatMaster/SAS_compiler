@@ -2122,6 +2122,21 @@ class CodeGen:
         y, xs = self._parse_model_stmt(model_raw)
         model_opts = model_raw.split("/", 1)[1] if "/" in model_raw else ""
         want_vif = bool(re.search(r"(?i)\bvif\b", model_opts))
+        selection_m = re.search(r"(?i)\bselection\s*=\s*(\w+)", model_opts)
+        selection = selection_m.group(1).lower() if selection_m else None
+        if selection == "stepwise":
+            raise CodegenError(
+                "PROC REG: SELECTION=STEPWISE is not supported; use BACKWARD or FORWARD"
+            )
+        if selection not in (None, "backward", "forward"):
+            raise CodegenError(
+                f"PROC REG: unsupported SELECTION={selection.upper()}; "
+                "use BACKWARD or FORWARD"
+            )
+        slstay_m = re.search(r"(?i)\bslstay\s*=\s*([\d.]+)", model_opts)
+        slstay = float(slstay_m.group(1)) if slstay_m else 0.05
+        slentry_m = re.search(r"(?i)\bslentry\s*=\s*([\d.]+)", model_opts)
+        slentry = float(slentry_m.group(1)) if slentry_m else 0.05
         output_clause = self._clause(proc, "output")
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
@@ -2132,7 +2147,8 @@ class CodeGen:
             out_stats_lit = repr(self._output_stat_dict(output_clause))
         self.w(
             f"_scored = _r.proc_reg_fit(_df, {y!r}, {xs!r}, out_stats={out_stats_lit}, "
-            f"vif={want_vif!r})"
+            f"vif={want_vif!r}, selection={selection!r}, slstay={slstay!r}, "
+            f"slentry={slentry!r})"
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
