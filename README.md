@@ -310,10 +310,11 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   C-function calls.
 - **Multi-dimensional ARRAYs** are stored flat in row-major order and
   tested through 3 dimensions (`array c{2,2,2} ...;`); there is no
-  declared cap, but going much higher than that is unverified. Only a
-  single flat, comma/space-separated initializer list is supported
-  (`array g{2,3} g1-g6 (1 2 3 4 5 6)`) — real SAS's nested
-  per-row `(1,2,3) (4,5,6)` initializer grouping is not parsed.
+  declared cap, but going much higher than that is unverified. Both a
+  single flat, comma/space-separated initializer list
+  (`array g{2,3} g1-g6 (1 2 3 4 5 6)`) and real SAS's nested
+  per-row `(1,2,3) (4,5,6)` initializer grouping are supported and
+  flatten to the same row-major values.
   `HBOUND`/`LBOUND` on a multi-dim array require an explicit dimension
   number (`HBOUND(grid, 1)`); calling them with just the array name
   raises a clear error instead of guessing which dimension was meant.

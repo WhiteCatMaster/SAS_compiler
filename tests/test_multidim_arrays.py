@@ -125,3 +125,42 @@ def test_do_over_multidim_iterates_flat_row_major():
         run;
     """)
     assert ds["out"].iloc[0]["total"] == 21
+
+
+def test_2d_array_nested_per_row_initializer():
+    ds = run_sas("""
+        data out;
+            array g{2,3} g1-g6 (1,2,3) (4,5,6);
+            output;
+        run;
+    """)
+    row = ds["out"].iloc[0]
+    assert [row["g1"], row["g2"], row["g3"], row["g4"], row["g5"], row["g6"]] == [1, 2, 3, 4, 5, 6]
+
+
+def test_2d_array_nested_per_row_initializer_matches_flat_form():
+    flat = run_sas("""
+        data out;
+            array g{2,3} g1-g6 (1 2 3 4 5 6);
+            output;
+        run;
+    """)["out"].iloc[0]
+    nested = run_sas("""
+        data out;
+            array g{2,3} g1-g6 (1,2,3) (4,5,6);
+            output;
+        run;
+    """)["out"].iloc[0]
+    for col in ["g1", "g2", "g3", "g4", "g5", "g6"]:
+        assert flat[col] == nested[col]
+
+
+def test_3d_array_nested_per_row_initializer():
+    ds = run_sas("""
+        data out;
+            array c{2,2,2} c1-c8 ((1,2)(3,4)) ((5,6)(7,8));
+            output;
+        run;
+    """)
+    row = ds["out"].iloc[0]
+    assert [row[f"c{i}"] for i in range(1, 9)] == [1, 2, 3, 4, 5, 6, 7, 8]

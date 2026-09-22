@@ -657,8 +657,8 @@ class Parser:
                 elements.append(elt)
 
         init_values = []
-        if self.peek().type == TokType.LPAREN:
-            init_values = self._parse_array_init_values()
+        while self.peek().type == TokType.LPAREN:
+            init_values.extend(self._parse_array_init_values())
 
         if dim is None:
             dim = len(elements) if elements else len(init_values)
@@ -698,6 +698,9 @@ class Parser:
         self.advance()  # '('
         values = []
         while self.peek().type != TokType.RPAREN and self.peek().type != TokType.EOF:
+            if self.peek().type == TokType.LPAREN:
+                values.extend(self._parse_array_init_values())
+                continue
             neg = False
             if self.peek().type == TokType.OP and self.peek().value == "-":
                 neg = True
