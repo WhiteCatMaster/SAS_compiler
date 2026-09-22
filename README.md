@@ -116,8 +116,11 @@ plus `VAR`, `WHERE`, `OBS=`/`FIRSTOBS=`, `NOOBS`, and a `SUM` totals row),
 MEDIAN VAR RANGE NMISS P1...P99` — in place of the N/MEAN/STD/MIN/MAX
 default — plus `TYPES`/`WAYS` class-combination control), `FREQ` (one-way
 and two-way `TABLES`, one- and two-way `OUTPUT OUT=`
-count/percent datasets, and a `CHISQ` table option on two-way `TABLES`
-for a Pearson chi-square test of independence report), `APPEND`,
+count/percent datasets, and a `CHISQ` table option on both one-way
+`TABLES` — a Pearson chi-square goodness-of-fit test against equal
+proportions across levels — and two-way `TABLES` — a Pearson chi-square
+test of independence report; `TESTP=` for narrowing the one-way expected
+proportions is out of scope), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`, `PREFIX=`/`SUFFIX=`/`DELIMITER=`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE` —
 including `libref.table` file/table renames and drops),

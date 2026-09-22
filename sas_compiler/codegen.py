@@ -1694,6 +1694,8 @@ class CodeGen:
                     self.w(f"_freq_rows.extend({{'{v1}': i, '{v2}': c, 'count': int(n), 'percent': 100.0 * n / max(len(_df), 1)}} for (i, c), n in _ct.stack().items())")
             else:
                 self.w(f"print(_df[{req!r}].value_counts(dropna=False))")
+                if want_chisq:
+                    self.w(f"_r.proc_freq_chisq_oneway(_df, {req!r})")
                 if out:
                     self.w(f"_vc = _df[{req!r}].value_counts(dropna=False)")
                     self.w(f"_freq_rows.extend({{'{req}': k, 'count': int(v), 'percent': 100.0 * v / max(len(_df), 1)}} for k, v in _vc.items())")
