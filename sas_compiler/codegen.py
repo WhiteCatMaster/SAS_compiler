@@ -13,6 +13,19 @@ class CodegenError(Exception):
     pass
 
 
+# PROC CLUSTER METHOD= (SAS name, lowercased) -> scipy.cluster.hierarchy.linkage
+# method= name. Kept in sync with the mapping validated again in
+# runtime.proc_cluster_report (which may be called directly).
+_CLUSTER_METHODS = {
+    "average": "average",
+    "ward": "ward",
+    "wards": "ward",
+    "single": "single",
+    "complete": "complete",
+    "centroid": "centroid",
+}
+
+
 CHAR_FUNCS = {
     "upcase", "lowcase", "propcase", "substr", "scan", "put", "strip", "trim",
     "left", "compress", "cats", "catx", "cat", "tranwrd", "ifc", "coalescec",
@@ -1270,6 +1283,8 @@ class CodeGen:
             self._gen_proc_npar1way(proc)
         elif name == "princomp":
             self._gen_proc_princomp(proc)
+        elif name == "cluster":
+            self._gen_proc_cluster(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2148,6 +2163,30 @@ class CodeGen:
         self.w(f"_scored = _r.proc_princomp_fit(_df, {var_list!r}, n={n!r}, use_cov={cov!r}, std_scores={std!r})")
         if out:
             self._store_out(out_raw, out, "_scored")
+
+    def _gen_proc_cluster(self, proc: A.ProcStep):
+        """Agglomerative/hierarchical clustering (scipy). Print-only, like
+        PROC TTEST/ANOVA/NPAR1WAY -- no OUT=-like dataset here (real PROC
+        CLUSTER's equivalent is the OUTTREE= tree-structure dataset, which
+        is out of scope; see proc_cluster_report's docstring)."""
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC CLUSTER requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        method = str(proc.options.get("method", "average")).lower()
+        if method not in _CLUSTER_METHODS:
+            raise CodegenError(
+                f"PROC CLUSTER: unrecognized METHOD= {method!r}; supported "
+                f"methods are {sorted(_CLUSTER_METHODS)!r}"
+            )
+        id_clause = self._clause(proc, "id")
+        id_var = id_clause[0][0] if id_clause else None
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_r.proc_cluster_report(_df, {var_list!r}, {method!r}, id_var={id_var!r})"
+        )
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
