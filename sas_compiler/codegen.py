@@ -1911,12 +1911,18 @@ class CodeGen:
         by_vars = [n for n, _ in by_clause] if by_clause else None
         criterion_raw = proc.options.get("criterion")
         criterion = float(criterion_raw) if criterion_raw is not None else 0.0
+        transform_clauses = [v for k, v in proc.clauses if k == "transform"]
+        transforms: dict = {}
+        for names, func_name in transform_clauses:
+            for n in names:
+                transforms[n] = func_name
         self.w(f"_base = {base_expr}")
         self.w(f"_compare = {compare_expr}")
         self.w(
             f"_cmp_diffs = _r.proc_compare_report(_base, _compare, "
             f"id_vars={id_vars!r}, var_list={var_list!r}, "
-            f"by_vars={by_vars!r}, criterion={criterion!r})"
+            f"by_vars={by_vars!r}, criterion={criterion!r}, "
+            f"transforms={transforms!r})"
         )
         out_raw = proc.options.get("out")
         if isinstance(out_raw, str):

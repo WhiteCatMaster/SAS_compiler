@@ -1628,6 +1628,16 @@ class Parser:
                     names.append(self.advance().value.lower())
                 clauses.append(("ranks", names))
                 self.skip_to_semi()
+            elif ckw == "transform":
+                self.advance()
+                var_names = []
+                while self.peek().type == TokType.IDENT:
+                    var_names.append(self.advance().value.lower())
+                if self.peek().type == TokType.OP and self.peek().value == "=":
+                    self.advance()
+                func_name = self.advance().value.lower() if self.peek().type == TokType.IDENT else ""
+                clauses.append(("transform", (var_names, func_name)))
+                self.skip_to_semi()
             elif ckw == "model":
                 self.advance()
                 start = self.peek().pos
