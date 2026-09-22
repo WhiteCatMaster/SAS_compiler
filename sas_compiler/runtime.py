@@ -1430,6 +1430,64 @@ def proc_ttest_report(df: pd.DataFrame, var_names: list, class_var: str | None,
     return None
 
 
+def proc_freq_chisq(df: pd.DataFrame, v1: str, v2: str):
+    """Print a PROC FREQ CHISQ-style Pearson chi-square test of
+    independence report for a two-way table (v1 rows x v2 columns).
+    Also reports Likelihood Ratio and Mantel-Haenszel chi-square when
+    they can be computed cheaply; falls back to Pearson-only otherwise.
+    Returns None (real PROC FREQ's CHISQ option has no OUT= dataset)."""
+    from scipy import stats as _stats
+
+    ct = pd.crosstab(df[v1], df[v2])
+    print("Statistics for Table")
+    print()
+    if ct.shape[0] < 2 or ct.shape[1] < 2 or (ct.values == 0).all():
+        print("WARNING: Table has a zero row or column, or fewer than 2 "
+              "levels in one or both variables; chi-square statistics "
+              "cannot be computed.")
+        print()
+        return None
+    try:
+        chi2, p, dof, expected = _stats.chi2_contingency(ct, correction=False)
+    except ValueError as e:
+        print(f"WARNING: Chi-square statistics could not be computed "
+              f"(sparse table): {e}")
+        print()
+        return None
+
+    print("Statistic                     DF       Value      Prob")
+    print(f"Chi-Square                    {dof:<8} {chi2:>10.4f}  {p:.4f}")
+
+    observed = ct.values.astype(float)
+    nonzero = observed > 0
+    lr_chi2 = 2.0 * float(np.sum(
+        observed[nonzero] * np.log(observed[nonzero] / expected[nonzero])
+    ))
+    lr_p = float(_stats.chi2.sf(lr_chi2, dof))
+    print(f"Likelihood Ratio Chi-Square   {dof:<8} {lr_chi2:>10.4f}  {lr_p:.4f}")
+
+    try:
+        rows = pd.to_numeric(pd.Series(ct.index), errors="coerce")
+        cols = pd.to_numeric(pd.Series(ct.columns), errors="coerce")
+        if not rows.isna().any() and not cols.isna().any():
+            row_codes = rows.to_numpy()
+            col_codes = cols.to_numpy()
+            x = np.repeat(row_codes, len(col_codes))
+            y_ = np.tile(col_codes, len(row_codes))
+            w = observed.flatten()
+            n = w.sum()
+            if n > 1:
+                r, _ = _stats.pearsonr(np.repeat(x, w.astype(int)),
+                                        np.repeat(y_, w.astype(int)))
+                mh_chi2 = (n - 1) * (r ** 2)
+                mh_p = float(_stats.chi2.sf(mh_chi2, 1))
+                print(f"Mantel-Haenszel Chi-Square    1        {mh_chi2:>10.4f}  {mh_p:.4f}")
+    except (ValueError, TypeError):
+        pass
+    print()
+    return None
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual
