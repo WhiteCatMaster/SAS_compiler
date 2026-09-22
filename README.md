@@ -127,8 +127,10 @@ any other table shape prints a warning instead of computing them), `APPEND`,
 `TRANSPOSE` (`BY`/`VAR`, with or without `ID`, `PREFIX=`/`SUFFIX=`/`DELIMITER=`), `IMPORT`/`EXPORT`
 (CSV, via `DATAFILE=`/`OUTFILE=`), `DATASETS` (`DELETE`, `CHANGE` —
 including `libref.table` file/table renames and drops),
-`UNIVARIATE` (moments, mode, quantiles, extreme observations, plus an
-optional `OUTPUT OUT=` moments dataset), `RANK` (`VAR`/`RANKS`/`BY`,
+`UNIVARIATE` (moments, mode, quantiles, extreme observations, a Tests for
+Normality section with Shapiro-Wilk and Kolmogorov-Smirnov statistics/
+p-values — Cramer-von Mises and Anderson-Darling are not implemented,
+plus an optional `OUTPUT OUT=` moments dataset), `RANK` (`VAR`/`RANKS`/`BY`,
 `DESCENDING`, average-rank ties, `GROUPS=` ntile buckets),
 `STANDARD` (`VAR var1 var2 ...;` required; rescales each VAR column to a
 target `MEAN=`/`STD=` — a z-score transform by default, `MEAN=0 STD=1` —

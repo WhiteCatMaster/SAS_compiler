@@ -1430,6 +1430,46 @@ def proc_corr_with_report(df: pd.DataFrame, cols: list, with_cols: list):
     return out
 
 
+def proc_univariate_normality(s: pd.Series):
+    """Print PROC UNIVARIATE's 'Tests for Normality' block for one variable's
+    non-missing values. Matches real SAS's default battery (Shapiro-Wilk,
+    Kolmogorov-Smirnov, Cramer-von Mises, Anderson-Darling) only in part:
+    this implementation covers Shapiro-Wilk and Kolmogorov-Smirnov. See the
+    README for the documented scope cut on the other two.
+    """
+    from scipy import stats as _stats
+
+    n = len(s)
+    print("Tests for Normality")
+
+    if n < 3:
+        print("  Shapiro-Wilk       not computed (N < 3)")
+    elif n > 2000:
+        print("  Shapiro-Wilk       not computed (N > 2000)")
+    else:
+        try:
+            w, p = _stats.shapiro(s)
+            print(f"  Shapiro-Wilk       W={w:.4f}  Pr < W={p:.4f}")
+        except Exception:
+            print("  Shapiro-Wilk       not computed")
+
+    if n < 2:
+        print("  Kolmogorov-Smirnov not computed (N < 2)")
+    else:
+        std = s.std(ddof=1)
+        if not std or pd.isna(std):
+            print("  Kolmogorov-Smirnov not computed (zero variance)")
+        else:
+            try:
+                # Equivalent to kstest(s, "norm", args=(mean, std)): test
+                # against a normal CDF fit to the sample's own mean/std,
+                # matching what real SAS's K-S normality test does.
+                d, p = _stats.kstest(s, _stats.norm(loc=s.mean(), scale=std).cdf)
+                print(f"  Kolmogorov-Smirnov D={d:.4f}  Pr > D={p:.4f}")
+            except Exception:
+                print("  Kolmogorov-Smirnov not computed")
+
+
 def _ttest_stat_line(s: pd.Series) -> tuple:
     """N/Mean/StdDev/StdErr for a numeric Series, SAS-TTEST style."""
     n = len(s)
