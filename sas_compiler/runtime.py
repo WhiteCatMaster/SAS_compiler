@@ -1580,6 +1580,82 @@ def proc_anova_oneway_report(df: pd.DataFrame, y: str, group_var: str):
     return None
 
 
+def proc_npar1way_report(df: pd.DataFrame, var_names: list, group_var: str):
+    """Print a PROC NPAR1WAY-style report for each VAR: a Wilcoxon-scores
+    (rank-sums-by-group) table, then a Wilcoxon rank-sum test (via
+    scipy.stats.mannwhitneyu) when the CLASS variable has exactly 2
+    non-missing levels, or a Kruskal-Wallis test (via scipy.stats.kruskal)
+    when it has more than 2. Returns None (real PROC NPAR1WAY has no OUT=
+    dataset here). Scope cut: only this default Wilcoxon/Kruskal-Wallis
+    behavior is implemented -- EDF, MEDIAN, SAVAGE, and other NPAR1WAY
+    test options are not."""
+    from scipy import stats as _stats
+
+    print("The NPAR1WAY Procedure")
+    print()
+
+    for v in var_names:
+        sub = df[[group_var, v]].copy()
+        sub[v] = pd.to_numeric(sub[v], errors="coerce")
+        sub = sub.dropna()
+
+        levels = sorted(sub[group_var].dropna().unique().tolist())
+        k = len(levels)
+        if k < 2:
+            raise ValueError(
+                f"PROC NPAR1WAY: CLASS variable {group_var!r} must have at "
+                f"least 2 non-missing levels, found {k}: {levels!r}"
+            )
+
+        print(f"Variable: {v}")
+        print("Classified by Variable: " + group_var)
+        print()
+
+        n_total = len(sub)
+        ranks = pd.Series(_stats.rankdata(sub[v].to_numpy()), index=sub.index)
+        expected_mean_rank = (n_total + 1) / 2.0
+
+        print("Wilcoxon Scores (Rank Sums)")
+        header = (f"{'Level':<12}{'N':>8}{'Sum of Scores':>16}"
+                  f"{'Expected Under H0':>20}{'Std Dev Under H0':>20}{'Mean Score':>14}")
+        print(header)
+        groups = {}
+        for lvl in levels:
+            mask = sub[group_var] == lvl
+            r = ranks[mask]
+            groups[lvl] = sub.loc[mask, v]
+            n_i = len(r)
+            sum_scores = float(r.sum())
+            expected = n_i * (n_total + 1) / 2.0
+            std_dev = math.sqrt(
+                n_i * (n_total - n_i) * (n_total + 1) / 12.0
+            ) if n_total > 1 else float("nan")
+            mean_score = sum_scores / n_i if n_i else float("nan")
+            print(f"{str(lvl):<12}{n_i:>8}{sum_scores:>16.4f}"
+                  f"{expected:>20.4f}{std_dev:>20.4f}{mean_score:>14.4f}")
+        print()
+
+        if k == 2:
+            a, b = groups[levels[0]], groups[levels[1]]
+            stat, p = _stats.mannwhitneyu(a, b, alternative="two-sided")
+            print("Wilcoxon Two-Sample Test (equivalent to the Mann-Whitney U test)")
+            print("NOTE: this reports the Mann-Whitney U statistic and its "
+                  "two-sided p-value rather than SAS's normalized S statistic.")
+            print(f"  Statistic (Mann-Whitney U) = {stat:.4f}")
+            print(f"  Pr > |Z| (two-sided)       = {p:.4f}")
+            print()
+        else:
+            group_values = [groups[lvl] for lvl in levels]
+            chi2, p = _stats.kruskal(*group_values)
+            dof = k - 1
+            print("Kruskal-Wallis Test")
+            print(f"{'Chi-Square':<14}{'DF':>6}{'Pr > Chi-Square':>20}")
+            print(f"{chi2:<14.4f}{dof:>6}{p:>20.4f}")
+            print()
+
+    return None
+
+
 def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
     """Fit an OLS regression (statsmodels), print its summary, and
     optionally return the input rows augmented with predicted/residual

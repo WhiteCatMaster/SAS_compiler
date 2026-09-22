@@ -1266,6 +1266,8 @@ class CodeGen:
             self._gen_proc_anova(proc)
         elif name == "standard":
             self._gen_proc_standard(proc)
+        elif name == "npar1way":
+            self._gen_proc_npar1way(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2017,6 +2019,25 @@ class CodeGen:
         self.w(f"_df = {self._proc_src(proc, dsname)}")
         self._gen_proc_filters(proc)
         self.w(f"_r.proc_anova_oneway_report(_df, {y!r}, {class_var!r})")
+
+    def _gen_proc_npar1way(self, proc: A.ProcStep):
+        """Wilcoxon rank-sum (2-level CLASS) / Kruskal-Wallis (k>2-level
+        CLASS) only -- other NPAR1WAY test options (EDF, MEDIAN, SAVAGE,
+        etc.) are not implemented."""
+        dsname = self._resolve_ds(proc)
+        class_clause = self._clause(proc, "class")
+        if not class_clause or len(class_clause) != 1:
+            raise CodegenError(
+                "PROC NPAR1WAY requires a CLASS statement with exactly one variable"
+            )
+        class_var = class_clause[0][0]
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC NPAR1WAY requires a VAR statement")
+        var_names = [n for n, _ in var_clause]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_r.proc_npar1way_report(_df, {var_names!r}, {class_var!r})")
 
     def _gen_proc_reg(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
