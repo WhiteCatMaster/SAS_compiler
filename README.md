@@ -197,8 +197,15 @@ more than 2; no `OUT=` dataset. Scope cut: only this default
 Wilcoxon/Kruskal-Wallis behavior is implemented — `EDF`, `MEDIAN`,
 `SAVAGE`, and other NPAR1WAY test-selection options are not, and the
 printed Wilcoxon two-sample statistic is scipy's Mann-Whitney U
-rather than SAS's normalized S statistic). `MODEL y = x1 x2 ...;` is
-the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
+rather than SAS's normalized S statistic), and `PRINCOMP` (principal
+component analysis via scikit-learn — `VAR var1 var2 ...;` for the
+input columns, `N=n` for how many components to compute (default: all
+of them), `COV` to fit PCA on the raw covariance matrix instead of the
+default standardize-then-correlation-matrix behavior, and `OUTPUT
+OUT=`/`OUT=` for the input rows plus 1-based `Prin1..PrinN` score
+columns, alongside printed Eigenvalues (Eigenvalue/Difference/
+Proportion/Cumulative) and Eigenvectors tables). `MODEL y = x1 x2
+...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref

@@ -2108,6 +2108,76 @@ def proc_fastclus_fit(df: pd.DataFrame, cols: list, k: int = 2):
     return result
 
 
+def proc_princomp_fit(df: pd.DataFrame, cols: list, n: int | None = None,
+                       use_cov: bool = False, std_scores: bool = False) -> pd.DataFrame:
+    """Principal component analysis (scikit-learn). By default (matching
+    real PROC PRINCOMP) each VAR column is standardized (zero mean, unit
+    variance) before PCA, i.e. components are eigenvectors of the
+    *correlation* matrix; COV=True skips standardization, so PCA fits the
+    (mean-centered only) raw variables, i.e. components are eigenvectors of
+    the *covariance* matrix. Prints an Eigenvalues table (Eigenvalue,
+    Difference, Proportion, Cumulative) and an Eigenvectors table (VAR
+    variables x retained components), then returns the input rows (missing
+    VAR values dropped) augmented with 1-based Prin1..PrinN score columns."""
+    from sklearn.decomposition import PCA
+
+    sub = df[cols].apply(pd.to_numeric, errors="coerce")
+    mask = sub.notna().all(axis=1)
+    clean = sub[mask]
+
+    if use_cov:
+        fit_data = clean.to_numpy()
+    else:
+        # Standardize with the sample (ddof=1) std, not sklearn's
+        # StandardScaler (which uses the population, ddof=0, std): PCA's
+        # own internal covariance estimate is ddof=1, so ddof=1
+        # standardization here makes its eigenvalues exactly the
+        # eigenvalues of the correlation matrix (summing to len(cols)),
+        # matching real PROC PRINCOMP.
+        fit_data = ((clean - clean.mean()) / clean.std(ddof=1)).to_numpy()
+
+    pca = PCA(n_components=n)
+    scores = pca.fit_transform(fit_data)
+    n_comp = scores.shape[1]
+
+    eigenvalues = pca.explained_variance_
+    proportion = pca.explained_variance_ratio_
+    cumulative = proportion.cumsum()
+    diffs = [eigenvalues[i] - eigenvalues[i + 1] for i in range(len(eigenvalues) - 1)]
+    diffs.append(float("nan"))
+
+    matrix_kind = "Covariance" if use_cov else "Correlation"
+    print("The PRINCOMP Procedure")
+    print(f"Eigenvalues of the {matrix_kind} Matrix")
+    eig_table = pd.DataFrame({
+        "Eigenvalue": eigenvalues,
+        "Difference": diffs,
+        "Proportion": proportion,
+        "Cumulative": cumulative,
+    }, index=[f"PRIN{i + 1}" for i in range(len(eigenvalues))])
+    print(eig_table.to_string())
+    print()
+
+    print("Eigenvectors")
+    vec_table = pd.DataFrame(
+        pca.components_.T,
+        index=cols,
+        columns=[f"Prin{i + 1}" for i in range(n_comp)],
+    )
+    print(vec_table.to_string())
+    print()
+
+    if std_scores:
+        score_std = scores.std(axis=0, ddof=1)
+        score_std[score_std == 0] = 1.0
+        scores = scores / score_std
+
+    result = df.loc[mask].copy()
+    for i in range(n_comp):
+        result[f"Prin{i + 1}"] = scores[:, i]
+    return result
+
+
 def proc_standardize(df: pd.DataFrame, var_names: list, target_mean: float = 0.0,
                       target_std: float = 1.0, replace: bool = False) -> pd.DataFrame:
     """PROC STANDARD: rescale each VAR column to a target mean/std

@@ -1268,6 +1268,8 @@ class CodeGen:
             self._gen_proc_standard(proc)
         elif name == "npar1way":
             self._gen_proc_npar1way(proc)
+        elif name == "princomp":
+            self._gen_proc_princomp(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2121,6 +2123,31 @@ class CodeGen:
         self.w(f"_clustered = _r.proc_fastclus_fit(_df, {var_list!r}, {k})")
         if out:
             self._store_out(out_raw, out, "_clustered")
+
+    def _gen_proc_princomp(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC PRINCOMP requires a VAR statement")
+        var_list = [n for n, _ in var_clause]
+        n_raw = proc.options.get("n")
+        n = int(n_raw) if isinstance(n_raw, str) else None
+        cov = bool(proc.options.get("cov"))
+        std = bool(proc.options.get("std"))
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_scored = _r.proc_princomp_fit(_df, {var_list!r}, n={n!r}, use_cov={cov!r}, std_scores={std!r})")
+        if out:
+            self._store_out(out_raw, out, "_scored")
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
