@@ -184,8 +184,18 @@ results, no `OUT=` dataset), and `ANOVA` (one-way only — one `CLASS`
 variable and `MODEL y = classvar;` — via scipy's `f_oneway`; prints
 Class Level Information plus the classic Source/DF/Sum of
 Squares/Mean Square/F Value/Pr > F table, R-Square, Coeff Var, and
-Root MSE, no `OUT=` dataset). `MODEL y = x1 x2 ...;` is the shared
-syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
+Root MSE, no `OUT=` dataset), and `NPAR1WAY` (`CLASS groupvar; VAR
+var1 var2 ...;`, one report block per `VAR`; always prints a
+Wilcoxon-scores rank-sums-by-group table, then a Wilcoxon rank-sum
+test — via scipy's `mannwhitneyu` — when `CLASS` has exactly 2
+non-missing levels, or a Kruskal-Wallis test — via scipy's
+`kruskal`, reported as Chi-Square/DF/Pr > Chi-Square — when it has
+more than 2; no `OUT=` dataset. Scope cut: only this default
+Wilcoxon/Kruskal-Wallis behavior is implemented — `EDF`, `MEDIAN`,
+`SAVAGE`, and other NPAR1WAY test-selection options are not, and the
+printed Wilcoxon two-sample statistic is scipy's Mann-Whitney U
+rather than SAS's normalized S statistic). `MODEL y = x1 x2 ...;` is
+the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
