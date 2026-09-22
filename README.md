@@ -124,6 +124,12 @@ including `libref.table` file/table renames and drops),
 `UNIVARIATE` (moments, mode, quantiles, extreme observations, plus an
 optional `OUTPUT OUT=` moments dataset), `RANK` (`VAR`/`RANKS`/`BY`,
 `DESCENDING`, average-rank ties, `GROUPS=` ntile buckets),
+`STANDARD` (`VAR var1 var2 ...;` required; rescales each VAR column to a
+target `MEAN=`/`STD=` — a z-score transform by default, `MEAN=0 STD=1` —
+`REPLACE` fills missing input values with that column's own original
+mean before rescaling, and a zero-variance/constant column comes back
+entirely missing instead of dividing by zero; `OUT=` defaults to
+overwriting `DATA=` in place, like `RANK`),
 `TABULATE` (`CLASS`/`VAR`/`TABLE row, col*var*stat` two-way pivots via `FORMAT` (see below), `GLM`, `FASTCLUS`
 (see below), `REPORT` (`COLUMN`/`DEFINE ... / GROUP|ANALYSIS stat|DISPLAY|COMPUTED`
 — grouped-and-summarized when a `GROUP` and an `ANALYSIS` variable are
