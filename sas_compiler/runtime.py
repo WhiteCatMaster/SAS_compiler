@@ -2644,6 +2644,98 @@ def proc_surveyselect(df: pd.DataFrame, n: int | None = None, samprate: float | 
     return result
 
 
+# ---------------- PROC ARIMA ----------------
+def proc_arima_fit(df: pd.DataFrame, var: str, order: tuple = (0, 0, 0),
+                    lead: int | None = None) -> pd.DataFrame | None:
+    """PROC ARIMA, scoped to a single IDENTIFY VAR= / ESTIMATE P=/D=/Q= /
+    FORECAST LEAD=[/OUT=] batch-mode block (see _parse_proc_arima's and
+    _gen_proc_arima's docstrings for the full list of scope cuts: no
+    differencing-in-VAR syntax, no seasonal terms, no INPUT= transfer
+    functions, no OUTLIER statement, no ESTIMATE METHOD=/competing
+    ESTIMATE blocks).
+
+    Fits statsmodels' ARIMA(order=(p, d, q)) on `var` and prints its
+    summary (AIC/BIC/coefficient table), matching how proc_reg_fit /
+    proc_logistic_fit just print `model.summary()`.
+
+    When `lead` is given (FORECAST LEAD=...), also forecasts that many
+    steps ahead and prints a small forecast table, returning a DataFrame
+    with columns "period" (sequential integers 1..lead -- see the FORECAST
+    ID= scope cut above: no real date extrapolation), "FORECAST" (the
+    predicted mean) and "L95"/"U95" (the 95% confidence interval bounds).
+    Without `lead`, nothing is forecast and this returns None (print-only,
+    like PROC TTEST/ANOVA/CLUSTER).
+
+    Guards against degenerate inputs with a clear ValueError rather than
+    an opaque statsmodels traceback: an unknown VAR=, an all-missing
+    series, missing values in the *middle* of the series (leading/trailing
+    missing values are trimmed automatically -- real contiguous time
+    series data shouldn't have gaps, but a leading/trailing warm-up period
+    is common), and too few observations for the requested (p, d, q)
+    order."""
+    from statsmodels.tsa.arima.model import ARIMA
+
+    if var not in df.columns:
+        raise ValueError(f"PROC ARIMA: VAR={var!r} is not a column in the input dataset")
+
+    series = pd.to_numeric(df[var], errors="coerce").reset_index(drop=True)
+    valid_pos = series.notna().to_numpy().nonzero()[0]
+    if valid_pos.size == 0:
+        raise ValueError(f"PROC ARIMA: VAR={var!r} has no numeric (non-missing) observations")
+    trimmed = series.iloc[valid_pos[0]:valid_pos[-1] + 1]
+    if trimmed.isna().any():
+        raise ValueError(
+            f"PROC ARIMA: VAR={var!r} has missing values in the middle of the "
+            "series -- ARIMA requires a contiguous series (leading/trailing "
+            "missing values are trimmed automatically, but interior gaps are not)"
+        )
+
+    p, d, q = order
+    min_obs = p + d + q + 1
+    if len(trimmed) < min_obs:
+        raise ValueError(
+            f"PROC ARIMA: not enough observations ({len(trimmed)}) to fit "
+            f"ARIMA(p={p}, d={d}, q={q}), which needs at least {min_obs}"
+        )
+
+    try:
+        model = ARIMA(trimmed.reset_index(drop=True), order=(p, d, q)).fit()
+    except Exception as exc:
+        raise ValueError(
+            f"PROC ARIMA: model fit failed for ARIMA(p={p}, d={d}, q={q}) on "
+            f"VAR={var!r}: {exc}"
+        ) from exc
+
+    print("The ARIMA Procedure")
+    print(f"Series: {var}   Model: ARIMA(p={p}, d={d}, q={q})")
+    print()
+    print(model.summary())
+
+    if not lead or lead <= 0:
+        return None
+
+    fc = model.get_forecast(steps=lead)
+    mean = fc.predicted_mean.to_numpy()
+    ci = fc.conf_int(alpha=0.05)
+    lower = ci.iloc[:, 0].to_numpy()
+    upper = ci.iloc[:, 1].to_numpy()
+    periods = list(range(1, lead + 1))
+
+    print()
+    print("Forecasts")
+    print(f"  {'Period':>6}  {'Forecast':>12}  {'Lower 95%':>12}  {'Upper 95%':>12}")
+    for i, per in enumerate(periods):
+        print(f"  {per:>6}  {mean[i]:>12.4f}  {lower[i]:>12.4f}  {upper[i]:>12.4f}")
+    print()
+
+    return pd.DataFrame({
+        "period": periods,
+        "FORECAST": mean,
+        "L95": lower,
+        "U95": upper,
+    })
+
+
 # ---------------- PROC SGPLOT ----------------
 def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
     """Render one or more overlaid SGPLOT-style plot statements onto a

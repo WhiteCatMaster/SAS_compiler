@@ -1575,6 +1575,8 @@ class Parser:
             return self._parse_proc_format(options)
         if name == "fcmp":
             return self._parse_proc_fcmp(options)
+        if name == "arima":
+            return self._parse_proc_arima(options)
 
         clauses = []
         while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
@@ -1935,6 +1937,94 @@ class Parser:
             self.advance()
             self.skip_to_semi()
         return A.ProcStep(name="fcmp", options=options, clauses=clauses)
+
+    def _parse_proc_arima(self, options) -> A.ProcStep:
+        """PROC ARIMA, scoped hard to the single most common batch-mode
+        pattern:
+            proc arima data=in;
+              identify var=y;
+              estimate p=1 q=1 d=0;
+              forecast lead=10 out=fcst;
+            run;
+
+        Scope cuts (deliberately out of scope -- real PROC ARIMA's grammar
+        is much larger and often used interactively/iteratively):
+          * IDENTIFY VAR=y(1) differencing-in-VAR syntax is not parsed --
+            only a bare VAR=<name>. Use ESTIMATE D= for differencing order.
+          * No seasonal P=(...)(...) multi-factor / SEASONAL= syntax.
+          * No INPUT=/transfer-function (ARIMAX) terms.
+          * No OUTLIER statement.
+          * No ESTIMATE METHOD= (statsmodels' default fit method is used)
+            and no multiple competing ESTIMATE blocks -- only the last
+            ESTIMATE statement in the PROC step is kept.
+          * FORECAST ID= is parsed (so it doesn't error) but real
+            date-arithmetic extrapolation of that variable is NOT
+            implemented -- the OUT= dataset always gets sequential integer
+            forecast-period numbers 1..LEAD, never real ID= is not used to
+            derive the codegen (see _gen_proc_arima / proc_arima_fit).
+
+        Any other statement keyword inside the PROC ARIMA block is skipped
+        to its semicolon and ignored (tolerant, matching this parser's
+        general philosophy elsewhere)."""
+        clauses = []
+        while not self.at_eof() and not self.is_kw("run") and not self.is_kw("quit") and not self.is_kw("data") and not self.is_kw("proc"):
+            if self.is_kw("identify"):
+                self.advance()
+                info = {"var": None}
+                while self.peek().type not in (TokType.SEMI, TokType.EOF):
+                    if self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP and self.peek(1).value == "=":
+                        key = self.advance().value.lower()
+                        self.advance()  # '='
+                        if key == "var" and self.peek().type == TokType.IDENT:
+                            info["var"] = self.advance().value.lower()
+                        elif self.peek().type not in (TokType.SEMI, TokType.EOF):
+                            self.advance()
+                    else:
+                        self.advance()
+                clauses.append(("identify", info))
+                self.skip_to_semi()
+            elif self.is_kw("estimate"):
+                self.advance()
+                info = {"p": 0, "d": 0, "q": 0}
+                while self.peek().type not in (TokType.SEMI, TokType.EOF):
+                    if self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP and self.peek(1).value == "=":
+                        key = self.advance().value.lower()
+                        self.advance()  # '='
+                        if key in ("p", "d", "q") and self.peek().type == TokType.NUMBER:
+                            info[key] = int(float(self.advance().value))
+                        elif self.peek().type not in (TokType.SEMI, TokType.EOF):
+                            self.advance()
+                    else:
+                        self.advance()
+                clauses.append(("estimate", info))
+                self.skip_to_semi()
+            elif self.is_kw("forecast"):
+                self.advance()
+                info = {"lead": 1, "out": None, "out_raw": None, "id": None}
+                while self.peek().type not in (TokType.SEMI, TokType.EOF):
+                    if self.peek().type == TokType.IDENT and self.peek(1).type == TokType.OP and self.peek(1).value == "=":
+                        key = self.advance().value.lower()
+                        self.advance()  # '='
+                        if key == "lead" and self.peek().type == TokType.NUMBER:
+                            info["lead"] = int(float(self.advance().value))
+                        elif key == "out" and self.peek().type == TokType.IDENT:
+                            raw = self._read_dotted_name()
+                            info["out"] = normalize_dsname(raw)
+                            info["out_raw"] = raw
+                        elif key == "id" and self.peek().type == TokType.IDENT:
+                            info["id"] = self.advance().value.lower()
+                        elif self.peek().type not in (TokType.SEMI, TokType.EOF):
+                            self.advance()
+                    else:
+                        self.advance()
+                clauses.append(("forecast", info))
+                self.skip_to_semi()
+            else:
+                self.skip_to_semi()
+        if self.is_kw("run") or self.is_kw("quit"):
+            self.advance()
+            self.skip_to_semi()
+        return A.ProcStep(name="arima", options=options, clauses=clauses)
 
     def _parse_proc_sql(self, options) -> A.ProcStep:
         start = self.peek().pos

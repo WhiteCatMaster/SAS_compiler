@@ -1331,6 +1331,8 @@ class CodeGen:
             self._gen_proc_cluster(proc)
         elif name == "surveyselect":
             self._gen_proc_surveyselect(proc)
+        elif name == "arima":
+            self._gen_proc_arima(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2264,6 +2266,40 @@ class CodeGen:
         self.w(
             f"_r.proc_cluster_report(_df, {var_list!r}, {method!r}, id_var={id_var!r})"
         )
+
+    def _gen_proc_arima(self, proc: A.ProcStep):
+        """PROC ARIMA, scoped to a single IDENTIFY/ESTIMATE/FORECAST block
+        (see _parse_proc_arima's docstring for the full list of scope
+        cuts: no differencing-in-VAR, no seasonal terms, no INPUT=
+        transfer functions, no OUTLIER, FORECAST ID= parsed but not used
+        for real date extrapolation -- forecast periods are always
+        sequential integers 1..LEAD).
+
+        IDENTIFY VAR= is required -- there is nothing to model without it.
+        ESTIMATE is also required: with no ESTIMATE, real SAS defaults to
+        p=0/d=0/q=0 (a degenerate white-noise model), and silently fitting
+        that would be more confusing than useful, so this compiler asks
+        for it explicitly instead of defaulting it.
+        FORECAST is optional: without it, PROC ARIMA just fits and prints
+        the model summary (print-only, like PROC TTEST/ANOVA/CLUSTER)."""
+        dsname = self._resolve_ds(proc)
+        identify = next((c[1] for c in proc.clauses if c[0] == "identify"), None)
+        if not identify or not identify.get("var"):
+            raise CodegenError("PROC ARIMA requires an IDENTIFY statement with VAR=")
+        estimate = next((c[1] for c in proc.clauses if c[0] == "estimate"), None)
+        if not estimate:
+            raise CodegenError("PROC ARIMA requires an ESTIMATE statement with P=/D=/Q=")
+        forecast = next((c[1] for c in proc.clauses if c[0] == "forecast"), None)
+
+        var = identify["var"]
+        order = (estimate.get("p", 0), estimate.get("d", 0), estimate.get("q", 0))
+        lead = forecast.get("lead") if forecast else None
+
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_fcst = _r.proc_arima_fit(_df, {var!r}, order={order!r}, lead={lead!r})")
+        if forecast and forecast.get("out"):
+            self._store_out(forecast.get("out_raw"), forecast["out"], "_fcst")
 
     # ---- PROC REPORT ----
     _REPORT_STAT_WORDS = {"sum", "mean", "n", "min", "max", "std", "median"}
