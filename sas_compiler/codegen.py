@@ -1358,6 +1358,8 @@ class CodeGen:
             self._gen_proc_pls(proc)
         elif name == "nlin":
             self._gen_proc_nlin(proc)
+        elif name == "cancorr":
+            self._gen_proc_cancorr(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2576,6 +2578,52 @@ class CodeGen:
         self.w(f"_classified = _r.proc_discrim_fit(_df, {class_var!r}, {var_list!r})")
         if out:
             self._store_out(out_raw, out, "_classified")
+
+    def _gen_proc_cancorr(self, proc: A.ProcStep):
+        """PROC CANCORR (canonical correlation analysis via scikit-learn's
+        `cross_decomposition.CCA`). `VAR` names one set of numeric
+        variables and `WITH` names the other (both required -- real SAS
+        CANCORR also requires both to define the two variable sets between
+        which canonical correlations are found). `VAR`/`WITH` are parsed
+        via the same generic statement-clause path PRINCOMP's `VAR`/PROC
+        TTEST's `WITH`(-shaped) statements already use -- no parser changes
+        needed.
+
+        `n_components = min(len(var_list), len(with_list))`, matching real
+        SAS CANCORR's own default. `OUT=`/`OUTPUT OUT=` (PROC option or
+        OUTPUT statement, same dual-form handling as PRINCOMP/FACTOR/PLS/
+        DISCRIM) gets the fit-subset rows augmented with VAR-side
+        `Can1..CanN` canonical variate score columns.
+
+        Scope cuts (see runtime.proc_cancorr_fit's docstring for the
+        runtime-side detail): no significance testing (no Wilks' Lambda /
+        approximate F tests -- only the canonical correlation coefficients
+        themselves are printed), and WITH-side scores are not included in
+        `OUT=` (real SAS's `OUT=` has both sides; only VAR-side scores are
+        implemented here)."""
+        dsname = self._resolve_ds(proc)
+        var_clause = self._clause(proc, "var")
+        if not var_clause:
+            raise CodegenError("PROC CANCORR requires a VAR statement")
+        with_clause = self._clause(proc, "with")
+        if not with_clause:
+            raise CodegenError("PROC CANCORR requires a WITH statement")
+        var_list = [n for n, _ in var_clause]
+        with_list = [n for n, _ in with_clause]
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_scored = _r.proc_cancorr_fit(_df, {var_list!r}, {with_list!r})")
+        if out:
+            self._store_out(out_raw, out, "_scored")
 
     def _gen_proc_cluster(self, proc: A.ProcStep):
         """Agglomerative/hierarchical clustering (scipy). Print-only, like
