@@ -308,7 +308,20 @@ overall log-rank test (`statsmodels.duration.survfunc.survdiff`,
 Chi-Square and p-value) comparing survival across them. Scope cuts:
 exactly one `CENSOR()` value is supported — real SAS's `CENSOR(0, 2)`-
 style multi-value lists are not — and there is no `OUTSURV=` output
-dataset; like `TTEST`/`ANOVA`/`CLUSTER`, `LIFETEST` is print-only).
+dataset; like `TTEST`/`ANOVA`/`CLUSTER`, `LIFETEST` is print-only),
+and `PHREG` (Cox proportional hazards regression via statsmodels'
+`PHReg` — `MODEL timevar*censorvar(censorvalue) = x1 x2 ...;` (note
+this is a *different* MODEL shape from the shared `y = x1 x2 ...;`
+form below: the left-hand side names the survival time variable and a
+censoring indicator, with the single value in parentheses marking a
+*censored* observation — any other observed value of `censorvar`
+means the event occurred); prints the statsmodels summary
+(coefficient/log-hazard-ratio table) plus a "Hazard Ratio Estimates"
+section listing each predictor's `exp(coef)`. Scope cuts: only a
+single censor value is supported (real SAS PHREG allows
+`censor(v1, v2, ...)`), there is no `OUTPUT OUT=` for risk
+scores/residuals, no `STRATA` statement, and no time-dependent
+covariates — print-only, like `TTEST`/`ANOVA`/`CLUSTER`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
@@ -477,8 +490,9 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST` raise a clear `NotImplementedError`
-  naming the missing PROC, rather than silently doing nothing.
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG` raise a clear
+  `NotImplementedError` naming the missing PROC, rather than silently
+  doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
   `CRITERION=` (a numeric fuzzy-equality tolerance), and `TRANSFORM`
   (applies `LOG`/`SQRT`/`EXP`/`ABS` to named variables in both BASE and

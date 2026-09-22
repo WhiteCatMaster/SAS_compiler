@@ -1310,6 +1310,8 @@ class CodeGen:
             self._gen_proc_logistic(proc)
         elif name == "glm":
             self._gen_proc_glm(proc)
+        elif name == "phreg":
+            self._gen_proc_phreg(proc)
         elif name == "fastclus":
             self._gen_proc_fastclus(proc)
         elif name == "report":
@@ -2226,6 +2228,48 @@ class CodeGen:
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
+
+    def _gen_proc_phreg(self, proc: A.ProcStep):
+        """PROC PHREG (Cox proportional hazards regression). The MODEL
+        statement has a different shape from the ordinary `y = x1 x2`
+        form shared by REG/LOGISTIC/GLM/ANOVA:
+
+            MODEL timevar*censorvar(censorvalue) = x1 x2 ...;
+
+        so this parses the raw MODEL clause text with its own regex
+        rather than calling `_parse_model_stmt`. Scope cut: a single
+        censor value (matching PROC LIFETEST's convention in this
+        codebase, if present), no OUTPUT OUT=, no STRATA, no
+        time-dependent covariates."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC PHREG requires a MODEL statement")
+        m = re.match(
+            r"^\s*([A-Za-z_]\w*)\s*\*\s*([A-Za-z_]\w*)\s*\(\s*([\d.]+)\s*\)\s*=\s*(.+)$",
+            model_raw,
+            re.S,
+        )
+        if not m:
+            raise CodegenError(
+                "PROC PHREG: MODEL statement must have the form "
+                "'timevar*censorvar(censorvalue) = predictors' "
+                f"(got: {model_raw!r})"
+            )
+        timevar = m.group(1).lower()
+        censorvar = m.group(2).lower()
+        censorvalue = float(m.group(3))
+        rhs = m.group(4)
+        # Strip a trailing `/ options` clause, mirroring _parse_model_stmt.
+        rhs = rhs.split("/", 1)[0]
+        xs = [tok.lower() for tok in re.split(r"[\s+]+", rhs.strip()) if tok and tok != "+"]
+        if not xs:
+            raise CodegenError("PROC PHREG: MODEL statement has no predictors")
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_r.proc_phreg_fit(_df, {timevar!r}, {censorvar!r}, {censorvalue!r}, {xs!r})"
+        )
 
     def _gen_proc_fastclus(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)
