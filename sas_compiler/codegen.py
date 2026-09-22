@@ -6,6 +6,7 @@ import os
 import re
 
 from . import ast_nodes as A
+from . import runtime as _rt
 from .parser import normalize_dsname
 
 
@@ -1336,6 +1337,8 @@ class CodeGen:
             self._gen_proc_surveyselect(proc)
         elif name == "arima":
             self._gen_proc_arima(proc)
+        elif name == "genmod":
+            self._gen_proc_genmod(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2178,6 +2181,55 @@ class CodeGen:
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
+
+    def _gen_proc_genmod(self, proc: A.ProcStep):
+        """Generalized linear models (Poisson/Gamma/Binomial/Gaussian) via
+        statsmodels GLM -- generalizes PROC REG (Gaussian/identity) and
+        PROC LOGISTIC (Binomial/logit) to other exponential-family
+        distributions with a configurable link. DIST=/LINK= are detected
+        from the MODEL clause's raw `/`-suffix text independently of
+        _parse_model_stmt (which only ever returns the clean (y, xs)
+        predictor list from before the `/`), mirroring exactly how PROC
+        REG's VIF/SELECTION= options are detected.
+
+        Scope cuts (see runtime.proc_genmod_fit's docstring for the
+        runtime-side detail): no CLASS variable support, no LINK=POWER(...)
+        (no clean way to parse its exponent without guessing), no
+        OUTPUT OUT= (GENMOD's OUTPUT statement has many DIST-specific
+        statistic keywords that are out of scope here). Print-only."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC GENMOD requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        model_opts = model_raw.split("/", 1)[1] if "/" in model_raw else ""
+
+        dist_m = re.search(r"(?i)\bdist\s*=\s*(\w+)", model_opts)
+        dist = dist_m.group(1).lower() if dist_m else "normal"
+        if dist not in _rt.GENMOD_DIST_NAMES:
+            raise CodegenError(
+                f"PROC GENMOD: unsupported DIST={dist.upper()!r}; supported "
+                "distributions are NORMAL/GAUSSIAN, POISSON, GAMMA, BINOMIAL/BIN"
+            )
+
+        link_m = re.search(r"(?i)\blink\s*=\s*(\w+)", model_opts)
+        link = link_m.group(1).lower() if link_m else None
+        if link == "power":
+            raise CodegenError(
+                "PROC GENMOD: LINK=POWER(...) is not supported (no exponent "
+                "parsing); use LINK=IDENTITY, LOG, or LOGIT"
+            )
+        if link is not None and link not in _rt.GENMOD_LINK_NAMES:
+            raise CodegenError(
+                f"PROC GENMOD: unsupported LINK={link.upper()!r}; supported "
+                "links are IDENTITY, LOG, LOGIT"
+            )
+
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_r.proc_genmod_fit(_df, {y!r}, {xs!r}, dist={dist!r}, link={link!r})"
+        )
 
     def _gen_proc_logistic(self, proc: A.ProcStep):
         dsname = self._resolve_ds(proc)

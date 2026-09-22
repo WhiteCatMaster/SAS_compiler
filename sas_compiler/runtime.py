@@ -2151,6 +2151,83 @@ def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None
     return result
 
 
+# Single source of truth for PROC GENMOD's supported DIST=/LINK= values,
+# shared between codegen's compile-time validation (which only needs the
+# key sets, so this module stays importable from codegen.py without paying
+# for a statsmodels import at compiler-load time) and proc_genmod_fit's
+# runtime resolution to actual statsmodels family/link objects below.
+GENMOD_DIST_NAMES = frozenset({"normal", "gaussian", "poisson", "gamma", "binomial", "bin"})
+GENMOD_LINK_NAMES = frozenset({"identity", "log", "logit"})
+
+
+def proc_genmod_fit(df: pd.DataFrame, y: str, xs: list, dist: str = "normal",
+                     link: str | None = None):
+    """Fit a generalized linear model (statsmodels GLM) and print its
+    summary. Generalizes PROC REG (Gaussian/identity) and PROC LOGISTIC
+    (Binomial/logit) to other exponential-family distributions with a
+    configurable link, i.e. real SAS PROC GENMOD.
+
+    `dist` selects the family: NORMAL/GAUSSIAN, POISSON, GAMMA, or
+    BINOMIAL/BIN (see GENMOD_DIST_NAMES). `link` selects the link function:
+    IDENTITY, LOG, or LOGIT (see GENMOD_LINK_NAMES); `link=None` (the
+    default, when SAS's MODEL statement omits LINK=) uses the family's own
+    canonical default link, matching both SAS's and statsmodels' default
+    behavior.
+
+    Scope cuts (see codegen._gen_proc_genmod for where these are enforced
+    at compile time): no CLASS variable support (predictors are always
+    coerced to numeric, unlike PROC GLM/LOGISTIC's _build_class_design_matrix
+    path); no LINK=POWER(exponent) (no clean, safe way to parse the
+    exponent out of the MODEL clause without guessing); no OUTPUT OUT=
+    (GENMOD's OUTPUT statement has many DIST-specific statistic keywords
+    that are out of scope here). Print-only, always returns None."""
+    import statsmodels.api as sm
+    from statsmodels.genmod.families import links as sm_links
+
+    dist_key = dist.lower()
+    family_cls = {
+        "normal": sm.families.Gaussian,
+        "gaussian": sm.families.Gaussian,
+        "poisson": sm.families.Poisson,
+        "gamma": sm.families.Gamma,
+        "binomial": sm.families.Binomial,
+        "bin": sm.families.Binomial,
+    }.get(dist_key)
+    if family_cls is None:
+        raise ValueError(
+            f"PROC GENMOD: unsupported DIST={dist!r}; supported distributions "
+            "are NORMAL/GAUSSIAN, POISSON, GAMMA, BINOMIAL/BIN"
+        )
+
+    link_obj = None
+    if link is not None:
+        link_cls = {
+            "identity": sm_links.Identity,
+            "log": sm_links.Log,
+            "logit": sm_links.Logit,
+        }.get(link.lower())
+        if link_cls is None:
+            raise ValueError(
+                f"PROC GENMOD: unsupported LINK={link!r}; supported links are "
+                "IDENTITY, LOG, LOGIT"
+            )
+        link_obj = link_cls()
+
+    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
+    X = sm.add_constant(sub[xs])
+
+    try:
+        family_obj = family_cls(link=link_obj) if link_obj is not None else family_cls()
+        model = sm.GLM(sub[y], X, family=family_obj).fit()
+    except Exception as e:
+        raise ValueError(
+            f"PROC GENMOD: GLM fit failed for DIST={dist!r} LINK={link!r}: {e}"
+        ) from e
+
+    print(model.summary())
+    return None
+
+
 # ---------------- LIBNAME / real database integration ----------------
 DB_LIBS: dict = {}
 
