@@ -1353,6 +1353,8 @@ class CodeGen:
             self._gen_proc_mixed(proc)
         elif name == "timeseries":
             self._gen_proc_timeseries(proc)
+        elif name == "pls":
+            self._gen_proc_pls(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2231,6 +2233,49 @@ class CodeGen:
         )
         if out:
             self._store_out(output_clause.get("out_raw"), out, "_scored")
+
+    def _gen_proc_pls(self, proc: A.ProcStep):
+        """PROC PLS (partial least squares regression via scikit-learn's
+        PLSRegression). Structurally a regression method -- like PROC REG,
+        MODEL y = x1 x2 ...; is required and parsed via _parse_model_stmt --
+        but its report/OUT= shape mirrors PROC PRINCOMP (a standardized-data
+        sklearn fit, a loadings table, score columns).
+
+        NFAC= (PROC statement option, number of PLS components to extract)
+        is resolved here at codegen time to an explicit int when given;
+        when omitted, an explicit None is passed through and
+        runtime.proc_pls_fit resolves the default itself (min(2, len(xs)),
+        clamped to at least 1) -- real SAS PLS instead defaults to a
+        cross-validation-selected number of factors, which is out of scope
+        here.
+
+        OUT= (PROC option or OUTPUT OUT=, same dual-form handling as PROC
+        PRINCOMP -- copied exactly) gets the fit-subset rows (missing y/x
+        values dropped) augmented with a `Predicted` column (the fitted response)
+        and Factor1..FactorN score columns -- a documented naming choice of
+        ours, not an attempt to replicate SAS PLS's own OUTPUT statement
+        column names."""
+        dsname = self._resolve_ds(proc)
+        model_raw = self._clause(proc, "model")
+        if not model_raw:
+            raise CodegenError("PROC PLS requires a MODEL statement")
+        y, xs = self._parse_model_stmt(model_raw)
+        nfac_raw = proc.options.get("nfac")
+        nfac = int(nfac_raw) if isinstance(nfac_raw, str) else None
+        output_clause = self._clause(proc, "output")
+        out = None
+        out_raw = None
+        if output_clause and output_clause.get("out"):
+            out = output_clause["out"]
+            out_raw = output_clause.get("out_raw")
+        elif isinstance(proc.options.get("out"), str):
+            out = normalize_dsname(proc.options["out"])
+            out_raw = proc.options["out"]
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(f"_scored = _r.proc_pls_fit(_df, {y!r}, {xs!r}, nfac={nfac!r})")
+        if out:
+            self._store_out(out_raw, out, "_scored")
 
     def _gen_proc_genmod(self, proc: A.ProcStep):
         """Generalized linear models (Poisson/Gamma/Binomial/Gaussian) via
