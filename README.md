@@ -338,7 +338,25 @@ guessing the exponent — `IDENTITY`/`LOG`/`LOGIT` are the only supported
 links), and no `OUTPUT OUT=` (GENMOD's `OUTPUT` statement has many
 `DIST=`-specific statistic keywords that are out of scope here;
 `GENMOD` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`/`ARIMA` without
-`FORECAST`).
+`FORECAST`), and `DISCRIM` (linear discriminant analysis / classification
+via scikit-learn's `LinearDiscriminantAnalysis` — `CLASS groupvar;`
+names the single grouping/response variable (required; real SAS DISCRIM
+itself only ever accepts one CLASS variable, so this isn't a scope cut)
+and `VAR var1 var2 ...;` lists the numeric predictors (also required);
+`OUTPUT OUT=`/`OUT=` (handled the same dual-form way as `FASTCLUS`/
+`PRINCOMP`) returns the fit-subset rows augmented with a predicted-class
+column named `_INTO_` (matching real SAS's own name for it) and one
+posterior-probability column per distinct class level, named
+`prob_<level>` — a documented naming convention of ours, not an attempt
+to reproduce SAS's own column-naming scheme for these. Always prints
+"The DISCRIM Procedure" with a resubstitution classification summary — a
+confusion matrix (actual vs. predicted class on the training data itself)
+plus the overall resubstitution accuracy/error rate — real SAS DISCRIM's
+own default output shape, whether or not `OUT=` is given. Scope cuts: no
+cross-validated error rate (resubstitution/apparent error rate only), no
+`PRIORS=` (equal priors, scikit-learn's default), no `POOL=` (LDA always
+pools covariance across classes), and no quadratic discriminant analysis
+(real SAS's `METHOD=` option)).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`, and
 `GENMOD`.
@@ -508,7 +526,7 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG` raise a clear
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
