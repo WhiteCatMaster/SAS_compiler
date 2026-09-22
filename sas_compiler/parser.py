@@ -1068,15 +1068,76 @@ class Parser:
     def _parse_input(self):
         self.advance()
         varlist = []
-        while self.peek().type == TokType.IDENT:
-            name = self.advance().value.lower()
-            is_char = False
-            if self.peek().type == TokType.OP and self.peek().value == "$":
-                is_char = True
+        items = []
+        has_control = False
+        while self.peek().type not in (TokType.SEMI, TokType.EOF):
+            tok = self.peek()
+            if tok.type == TokType.OP and tok.value == "@":
                 self.advance()
-            varlist.append((name, is_char))
+                if self.peek().type == TokType.NUMBER:
+                    n = int(float(self.advance().value))
+                    items.append(("ptr_abs", n))
+                    has_control = True
+                # `@var`/trailing `@` (hold line for next INPUT) not
+                # supported; skip silently to avoid stalling the loop.
+                continue
+            if tok.type == TokType.OP and tok.value == "+":
+                self.advance()
+                if self.peek().type == TokType.NUMBER:
+                    n = int(float(self.advance().value))
+                    items.append(("ptr_rel", n))
+                    has_control = True
+                continue
+            if tok.type == TokType.OP and tok.value == "/":
+                self.advance()
+                items.append(("newline",))
+                has_control = True
+                continue
+            if tok.type == TokType.IDENT:
+                name = self.advance().value.lower()
+                is_char = False
+                if self.peek().type == TokType.OP and self.peek().value == "$":
+                    is_char = True
+                    self.advance()
+                width = None
+                decimals = None
+                start = None
+                end = None
+                if self.peek().type == TokType.NUMBER:
+                    nxt1 = self.peek(1)
+                    if nxt1.type == TokType.OP and nxt1.value == "-":
+                        # column range: var start-end
+                        start = int(float(self.advance().value))
+                        self.advance()  # '-'
+                        if self.peek().type == TokType.NUMBER:
+                            end = int(float(self.advance().value))
+                        has_control = True
+                    else:
+                        raw = self.peek().value
+                        if "." in raw:
+                            # fused width.decimals, e.g. NUMBER '6.2'
+                            self.advance()
+                            w_part, d_part = raw.split(".", 1)
+                            width = int(w_part) if w_part else None
+                            decimals = int(d_part) if d_part else None
+                            has_control = True
+                        elif nxt1.type == TokType.OP and nxt1.value == ".":
+                            # width followed by a bare '.' (optionally '.N')
+                            width = int(self.advance().value)
+                            self.advance()  # '.'
+                            if self.peek().type == TokType.NUMBER:
+                                decimals = int(float(self.advance().value))
+                            has_control = True
+                        # else: a bare trailing number with no '.' isn't a
+                        # recognized width informat; leave it unconsumed.
+                varlist.append((name, is_char))
+                items.append(("var", name, is_char, width, decimals, start, end))
+                continue
+            # unrecognized token (e.g. stray punctuation): skip it, mirroring
+            # the old skip-to-semi tolerance.
+            self.advance()
         self.skip_to_semi()
-        return A.InputStmt(vars=varlist)
+        return A.InputStmt(vars=varlist, items=items if has_control else None)
 
     def _parse_infile(self):
         self.advance()  # 'infile'
