@@ -3284,6 +3284,107 @@ def proc_arima_fit(df: pd.DataFrame, var: str, order: tuple = (0, 0, 0),
     })
 
 
+def proc_timeseries_decomp(df: pd.DataFrame, var: str, period: int = 12,
+                            model: str = "additive") -> pd.DataFrame:
+    """PROC TIMESERIES, scoped down hard to decomposing an already
+    regularly-spaced series (one row per period, in row order -- see
+    _gen_proc_timeseries's docstring for the full list of scope cuts: no
+    ID/INTERVAL= accumulation of irregular transaction data, no CORR/
+    SPECTRA/SEASON/TREND statements, no OUTDECOMP=-precise column
+    layout).
+
+    Runs statsmodels' `seasonal_decompose` on `var` with the given
+    `period` (our own default of 12 when PERIOD= is omitted -- real SAS
+    derives the natural period from INTERVAL=, which isn't implemented
+    here) and `model` ("additive" by default; "multiplicative" is also
+    accepted).
+
+    Guards against degenerate inputs with a clear ValueError rather than
+    an opaque statsmodels traceback, mirroring proc_arima_fit's
+    trimming convention: leading/trailing missing values are trimmed
+    automatically (a warm-up/cool-down period is common), but missing
+    values in the *interior* of the series raise an error, since
+    `seasonal_decompose` cannot handle gaps. Also requires at least
+    `2 * period` observations, which `seasonal_decompose` itself
+    requires for a meaningful seasonal estimate.
+
+    Prints "The TIMESERIES Procedure" plus a short summary (the head of
+    each recovered component), and returns a DataFrame (for OUT=/
+    OUTPUT OUT=) with columns:
+      - "observed": the original (numeric-coerced) series
+      - "trend": the recovered trend component
+      - "seasonal": the recovered seasonal component
+      - "residual": the recovered residual component
+    aligned to the original row index. Trend/residual are NaN at the
+    series' edges (half a period on each side) -- that's expected
+    `seasonal_decompose` behavior and is not filled in. These are this
+    compiler's own column names, not real SAS OUTDECOMP='s exact
+    per-component column layout."""
+    from statsmodels.tsa.seasonal import seasonal_decompose
+
+    if var not in df.columns:
+        raise ValueError(f"PROC TIMESERIES: VAR={var!r} is not a column in the input dataset")
+
+    # Keep the original row index (not reset) so the OUT= dataset lines up
+    # with df's own rows; trimming is positional (row order), matching
+    # proc_arima_fit's convention.
+    series = pd.to_numeric(df[var], errors="coerce")
+    valid_pos = series.notna().to_numpy().nonzero()[0]
+    if valid_pos.size == 0:
+        raise ValueError(f"PROC TIMESERIES: VAR={var!r} has no numeric (non-missing) observations")
+    trimmed = series.iloc[valid_pos[0]:valid_pos[-1] + 1]
+    if trimmed.isna().any():
+        raise ValueError(
+            f"PROC TIMESERIES: VAR={var!r} has missing values in the middle of "
+            "the series -- decomposition requires a contiguous series "
+            "(leading/trailing missing values are trimmed automatically, but "
+            "interior gaps are not)"
+        )
+
+    if period < 2:
+        raise ValueError(f"PROC TIMESERIES: PERIOD={period!r} must be at least 2")
+    if len(trimmed) < 2 * period:
+        raise ValueError(
+            f"PROC TIMESERIES: not enough observations ({len(trimmed)}) for "
+            f"PERIOD={period}; seasonal decomposition needs at least "
+            f"{2 * period} (2 * PERIOD=)"
+        )
+
+    try:
+        result = seasonal_decompose(
+            trimmed.reset_index(drop=True), model=model, period=period
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"PROC TIMESERIES: decomposition failed for VAR={var!r} "
+            f"(model={model!r}, period={period}): {exc}"
+        ) from exc
+
+    print("The TIMESERIES Procedure")
+    print(f"Series: {var}   Model: {model}   Period: {period}")
+    print()
+    print("Trend component (head):")
+    print(result.trend.head().to_string())
+    print()
+    print("Seasonal component (head):")
+    print(result.seasonal.head().to_string())
+    print()
+    print("Residual component (head):")
+    print(result.resid.head().to_string())
+    print()
+
+    trend = result.trend.to_numpy()
+    seasonal = result.seasonal.to_numpy()
+    resid = result.resid.to_numpy()
+    out = pd.DataFrame({
+        "observed": trimmed,
+        "trend": pd.Series(trend, index=trimmed.index),
+        "seasonal": pd.Series(seasonal, index=trimmed.index),
+        "residual": pd.Series(resid, index=trimmed.index),
+    })
+    return out.reindex(series.index)
+
+
 # ---------------- PROC SGPLOT ----------------
 def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
     """Render one or more overlaid SGPLOT-style plot statements onto a
