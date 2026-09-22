@@ -643,6 +643,78 @@ def test_proc_means_explicit_stat_keywords():
     assert row["x_p75"] == 4.0
 
 
+def test_proc_means_lclm_uclm_confidence_interval():
+    from scipy import stats as scipy_stats
+
+    src = """
+    data src;
+      input x;
+      datalines;
+    1
+    2
+    3
+    4
+    5
+    ;
+    run;
+    proc means data=src mean lclm uclm noprint;
+      var x;
+      output out=stats;
+    run;
+    """
+    ds = run_sas(src)
+    row = ds["stats"].iloc[0]
+    n = 5
+    mean = 3.0
+    std = pd.Series([1, 2, 3, 4, 5]).std()
+    se = std / n ** 0.5
+    margin = scipy_stats.t.ppf(0.975, n - 1) * se
+    assert row["x_mean"] == pytest.approx(mean)
+    assert row["x_lclm"] == pytest.approx(mean - margin)
+    assert row["x_uclm"] == pytest.approx(mean + margin)
+
+
+def test_proc_means_lclm_uclm_by_class_group():
+    from scipy import stats as scipy_stats
+
+    src = """
+    data src;
+      input g $ x;
+      datalines;
+    a 1
+    a 2
+    a 3
+    a 4
+    b 10
+    b 20
+    b 30
+    ;
+    run;
+    proc means data=src mean lclm uclm noprint;
+      class g;
+      var x;
+      output out=stats;
+    run;
+    """
+    ds = run_sas(src)
+    out = ds["stats"].set_index("g")
+
+    def expected_bounds(values):
+        s = pd.Series(values, dtype=float)
+        n = len(s)
+        mean = s.mean()
+        se = s.std() / n ** 0.5
+        margin = scipy_stats.t.ppf(0.975, n - 1) * se
+        return mean - margin, mean + margin
+
+    a_lo, a_hi = expected_bounds([1, 2, 3, 4])
+    b_lo, b_hi = expected_bounds([10, 20, 30])
+    assert out.loc["a", "x_lclm"] == pytest.approx(a_lo)
+    assert out.loc["a", "x_uclm"] == pytest.approx(a_hi)
+    assert out.loc["b", "x_lclm"] == pytest.approx(b_lo)
+    assert out.loc["b", "x_uclm"] == pytest.approx(b_hi)
+
+
 def test_proc_datasets_delete_and_change():
     src = """
     data temp1 temp2 keep_me;
