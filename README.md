@@ -240,7 +240,27 @@ each distinct combination of STRATA values, applying the same
 requests contributes all of its rows rather than erroring; `OUT=` is
 required, like real SAS. Scope cuts: only `METHOD=SRS` is implemented
 — systematic, PPS, and SAS's other sampling methods are not — and
-there is no `OUTALL=`/`SELECTALL` or other advanced option support).
+there is no `OUTALL=`/`SELECTALL` or other advanced option support),
+and `ARIMA` (ARIMA time series modeling/forecasting via
+statsmodels — scoped hard to a single batch-mode `IDENTIFY`/`ESTIMATE`/
+`FORECAST` block: `IDENTIFY VAR=var;` names the series, `ESTIMATE
+P=p D=d Q=q;` fits `ARIMA(p, d, q)` (any subset of `P=`/`D=`/`Q=`
+defaults to 0) and prints the model summary (AIC/BIC/coefficient
+table, via `model.summary()` like `REG`/`LOGISTIC`), and an optional
+`FORECAST LEAD=n OUT=ds;` forecasts `n` steps ahead, printing a
+Period/Forecast/Lower 95%/Upper 95% table and writing it to `OUT=` with
+columns `period`/`FORECAST`/`L95`/`U95`. Both `IDENTIFY VAR=` and
+`ESTIMATE` are required (a degenerate, unrequested `p=0,d=0,q=0` model
+is refused rather than silently fit); `FORECAST` is optional — without
+it, `ARIMA` is print-only like `TTEST`/`ANOVA`/`CLUSTER`. Scope cuts:
+only one `IDENTIFY`/`ESTIMATE`/`FORECAST` block is supported (no
+iterative re-`ESTIMATE`), no differencing-in-`VAR` syntax
+(`VAR=y(1)`) — use `ESTIMATE D=` instead, no seasonal
+`P=(...)(...)`/`SEASONAL=` multi-factor terms, no `INPUT=`
+transfer-function (ARIMAX) terms, no `OUTLIER` statement, no `ESTIMATE
+METHOD=`; `FORECAST ID=` is parsed (so it doesn't error) but real
+date-arithmetic extrapolation of that variable is not implemented —
+forecast periods in `OUT=` are always sequential integers `1..LEAD`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
@@ -409,8 +429,8 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT` raise a clear `NotImplementedError` naming the
-  missing PROC, rather than silently doing nothing.
+  `SQL`/`SURVEYSELECT`/`ARIMA` raise a clear `NotImplementedError` naming
+  the missing PROC, rather than silently doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
   `CRITERION=` (a numeric fuzzy-equality tolerance), and `TRANSFORM`
   (applies `LOG`/`SQRT`/`EXP`/`ABS` to named variables in both BASE and
