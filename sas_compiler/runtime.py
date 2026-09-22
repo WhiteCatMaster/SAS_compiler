@@ -13,8 +13,10 @@ import html as _html
 import math
 import re
 import sys
+from collections import defaultdict
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 
 MISSING = float("nan")
@@ -2030,7 +2032,8 @@ def _compare_values_equal(a, b, criterion: float = 0.0) -> bool:
 
 def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
                          id_vars: list | None = None, var_list: list | None = None,
-                         by_vars: list | None = None, criterion: float = 0.0) -> pd.DataFrame:
+                         by_vars: list | None = None, criterion: float = 0.0,
+                         transforms: dict | None = None) -> pd.DataFrame:
     """Print a PROC COMPARE-style report (row alignment by ID or by
     position, per-variable mismatch counts, and a capped list of
     differing values) and return a long-form DataFrame of differences
@@ -2040,9 +2043,12 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
     CRITERION= gives a numeric equality tolerance (abs(a - b) <=
     criterion counts as equal); BY= runs a separate comparison, with
     its own printed report, per distinct combination of BY-variable
-    values found across BASE/COMPARE. No TRANSFORM= support, and ID
-    alignment takes the first row per key value when a key repeats
-    rather than matching multiple occurrences pairwise."""
+    values found across BASE/COMPARE. TRANSFORM= (via `transforms`, a
+    {var_name: func_name} map with func_name one of "log"/"sqrt"/
+    "exp"/"abs") applies the named function to that variable in both
+    BASE and COMPARE before comparing; when an ID value repeats,
+    repeated occurrences on each side are matched pairwise in
+    encounter order."""
     if by_vars:
         all_keys: list = []
         seen = set()
@@ -2064,6 +2070,7 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
             sub_diffs = _proc_compare_single(
                 base[mask_b].drop(columns=by_vars), compare[mask_c].drop(columns=by_vars),
                 id_vars=id_vars, var_list=var_list, criterion=criterion,
+                transforms=transforms,
             )
             for d in sub_diffs:
                 for c, v in zip(by_vars, key):
@@ -2073,17 +2080,37 @@ def proc_compare_report(base: pd.DataFrame, compare: pd.DataFrame,
         cols = list(by_vars) + ["_id_", "_var_", "_base_", "_compare_"]
         return pd.DataFrame(all_diffs, columns=cols) if all_diffs else pd.DataFrame(columns=cols)
 
-    diffs = _proc_compare_single(base, compare, id_vars=id_vars, var_list=var_list, criterion=criterion)
+    diffs = _proc_compare_single(base, compare, id_vars=id_vars, var_list=var_list, criterion=criterion,
+                                  transforms=transforms)
     return pd.DataFrame(diffs, columns=["_id_", "_var_", "_base_", "_compare_"]) if diffs else \
         pd.DataFrame(columns=["_id_", "_var_", "_base_", "_compare_"])
 
 
+_COMPARE_TRANSFORM_FUNCS = {
+    "log": np.log,
+    "sqrt": np.sqrt,
+    "exp": np.exp,
+    "abs": np.abs,
+}
+
+
 def _proc_compare_single(base: pd.DataFrame, compare: pd.DataFrame,
                           id_vars: list | None, var_list: list | None,
-                          criterion: float) -> list:
+                          criterion: float, transforms: dict | None = None) -> list:
     """Run and print one PROC COMPARE report for a single BASE/COMPARE
     pair (one BY-group's worth, or the whole datasets when BY isn't
     used); returns the list of difference records."""
+    if transforms:
+        base = base.copy()
+        compare = compare.copy()
+        for col, func_name in transforms.items():
+            func = _COMPARE_TRANSFORM_FUNCS.get(func_name)
+            if func is None:
+                raise ValueError(f"unsupported PROC COMPARE TRANSFORM= function: {func_name!r}")
+            if col in base.columns:
+                base[col] = func(base[col])
+            if col in compare.columns:
+                compare[col] = func(compare[col])
     base_cols = list(base.columns)
     compare_cols = list(compare.columns)
     only_base_cols = [c for c in base_cols if c not in compare_cols]
@@ -2114,12 +2141,12 @@ def _proc_compare_single(base: pd.DataFrame, compare: pd.DataFrame,
     compare_only_keys: list = []
 
     if id_vars:
-        b_map: dict = {}
+        b_map: dict = defaultdict(list)
         for r in base.to_dict("records"):
-            b_map.setdefault(tuple(r.get(k) for k in id_vars), r)
-        c_map: dict = {}
+            b_map[tuple(r.get(k) for k in id_vars)].append(r)
+        c_map: dict = defaultdict(list)
         for r in compare.to_dict("records"):
-            c_map.setdefault(tuple(r.get(k) for k in id_vars), r)
+            c_map[tuple(r.get(k) for k in id_vars)].append(r)
         seen = set()
         all_keys = []
         for k in list(b_map.keys()) + list(c_map.keys()):
@@ -2131,26 +2158,35 @@ def _proc_compare_single(base: pd.DataFrame, compare: pd.DataFrame,
             return ", ".join(f"{kk}={vv}" for kk, vv in zip(id_vars, k))
 
         for key in all_keys:
-            in_b, in_c = key in b_map, key in c_map
-            if not in_b:
-                compare_only_keys.append(key)
+            b_rows = b_map.get(key, [])
+            c_rows = c_map.get(key, [])
+            if not b_rows:
+                compare_only_keys.extend([key] * len(c_rows))
                 continue
-            if not in_c:
-                base_only_keys.append(key)
+            if not c_rows:
+                base_only_keys.extend([key] * len(b_rows))
                 continue
-            obs_compared += 1
-            brow, crow = b_map[key], c_map[key]
-            row_equal = True
-            for col in common_cols:
-                bv, cv = brow.get(col), crow.get(col)
-                if _compare_values_equal(bv, cv, criterion):
-                    var_match[col] += 1
-                else:
-                    var_diff[col] += 1
-                    row_equal = False
-                    diffs.append({"_id_": _key_label(key), "_var_": col, "_base_": bv, "_compare_": cv})
-            if row_equal:
-                obs_equal += 1
+            # Repeated ID values are matched pairwise in encounter
+            # order (1st BASE row for key K vs. 1st COMPARE row for
+            # key K, 2nd vs. 2nd, ...); any extra occurrences on the
+            # longer side count as unmatched, like a wholly-missing key.
+            for brow, crow in zip(b_rows, c_rows):
+                obs_compared += 1
+                row_equal = True
+                for col in common_cols:
+                    bv, cv = brow.get(col), crow.get(col)
+                    if _compare_values_equal(bv, cv, criterion):
+                        var_match[col] += 1
+                    else:
+                        var_diff[col] += 1
+                        row_equal = False
+                        diffs.append({"_id_": _key_label(key), "_var_": col, "_base_": bv, "_compare_": cv})
+                if row_equal:
+                    obs_equal += 1
+            if len(b_rows) > len(c_rows):
+                base_only_keys.extend([key] * (len(b_rows) - len(c_rows)))
+            elif len(c_rows) > len(b_rows):
+                compare_only_keys.extend([key] * (len(c_rows) - len(b_rows)))
     else:
         n = min(len(base), len(compare))
         b_records = base.to_dict("records")[:n]

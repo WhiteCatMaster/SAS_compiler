@@ -302,11 +302,15 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
   `SQL` raise a clear `NotImplementedError` naming the missing PROC, rather
   than silently doing nothing.
-- **PROC COMPARE** supports `BY` (a separate report per BY-group) and
-  `CRITERION=` (a numeric fuzzy-equality tolerance), but has no
-  `TRANSFORM=`, and its `ID` alignment takes the first row per key
-  value when a key repeats rather than matching multiple occurrences
-  pairwise.
+- **PROC COMPARE** supports `BY` (a separate report per BY-group),
+  `CRITERION=` (a numeric fuzzy-equality tolerance), and `TRANSFORM`
+  (applies `LOG`/`SQRT`/`EXP`/`ABS` to named variables in both BASE and
+  COMPARE before comparing — no argument forms like `LOG(var+1)` and no
+  per-variable functions within one `TRANSFORM` statement). `ID`
+  alignment matches repeated key values pairwise in encounter order
+  (1st BASE row for a key vs. 1st COMPARE row for that key, 2nd vs.
+  2nd, ...), with any extra occurrences on one side reported as
+  unmatched.
 - **PROC FCMP** functions support scalar numeric/character parameters,
   assignment, `IF`/`THEN`/`ELSE`, and `RETURN(expr)` in their bodies (the
   same DATA-step statement grammar, minus anything dataset-shaped like
