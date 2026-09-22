@@ -195,7 +195,9 @@ and raises a compile error rather than being approximated), `LOGISTIC`
 (binary logistic regression via statsmodels — summary, odds ratios, an
 "Association of Predicted Probabilities and Observed Responses" section
 with the `c` statistic (concordance / ROC AUC, via scikit-learn) and
-Somers' D, and `OUTPUT OUT= P=` for predicted probabilities; scope cut:
+Somers' D, `OUTPUT OUT= P=` for predicted probabilities, and a
+`CLASS var1 var2;` statement that dummy-encodes categorical predictors
+— drop-first indicator columns — before fitting; scope cut:
 the Percent Concordant/Discordant/Tied, Gamma, and Tau-a figures real
 PROC LOGISTIC also prints there are not computed), `GLM` (OLS via
 statsmodels like `REG`, plus a `CLASS var1 var2;` statement that

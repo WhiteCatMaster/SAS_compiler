@@ -2010,14 +2010,46 @@ def proc_reg_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = No
     return result
 
 
-def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None):
+def _build_class_design_matrix(df: pd.DataFrame, y: str, xs: list, class_vars: list | None):
+    """Shared by PROC GLM and PROC LOGISTIC: build a design matrix where
+    predictors named in `class_vars` are dummy-encoded (drop_first) as
+    categorical predictors, and every other predictor (plus `y`) is coerced
+    to numeric. Returns `(sub, X)` where `sub` is the cleaned (NaN-dropped)
+    input frame with `y` already numeric-coerced, and `X` is the design
+    matrix (with an added constant column) ready to pass to an sm fitter."""
+    import statsmodels.api as sm
+
+    class_vars = class_vars or []
+    cont_vars = [x for x in xs if x not in class_vars]
+
+    sub = df[[y] + xs].copy()
+    sub[y] = pd.to_numeric(sub[y], errors="coerce")
+    for c in cont_vars:
+        sub[c] = pd.to_numeric(sub[c], errors="coerce")
+    for c in class_vars:
+        sub[c] = sub[c].astype(str)
+    sub = sub.dropna()
+
+    design_parts = []
+    if cont_vars:
+        design_parts.append(sub[cont_vars].astype(float))
+    if class_vars:
+        design_parts.append(pd.get_dummies(sub[class_vars], drop_first=True, dtype=float))
+    X = pd.concat(design_parts, axis=1) if design_parts else pd.DataFrame(index=sub.index)
+    X = sm.add_constant(X)
+    return sub, X
+
+
+def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None = None,
+                       class_vars: list | None = None):
     """Fit a binary logistic regression (statsmodels), print its summary,
-    and optionally return predicted-probability columns per `out_stats`."""
+    and optionally return predicted-probability columns per `out_stats`.
+    Predictors named in `class_vars` are dummy-encoded (drop_first) as
+    categorical predictors instead of being coerced to numeric."""
     import math as _math
     import statsmodels.api as sm
 
-    sub = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
-    X = sm.add_constant(sub[xs])
+    sub, X = _build_class_design_matrix(df, y, xs, class_vars)
     model = sm.Logit(sub[y], X).fit(disp=0)
     print(model.summary())
     print()
@@ -2360,24 +2392,7 @@ def proc_glm_fit(df: pd.DataFrame, y: str, xs: list, class_vars: list | None = N
     predictors instead of being coerced to numeric."""
     import statsmodels.api as sm
 
-    class_vars = class_vars or []
-    cont_vars = [x for x in xs if x not in class_vars]
-
-    sub = df[[y] + xs].copy()
-    sub[y] = pd.to_numeric(sub[y], errors="coerce")
-    for c in cont_vars:
-        sub[c] = pd.to_numeric(sub[c], errors="coerce")
-    for c in class_vars:
-        sub[c] = sub[c].astype(str)
-    sub = sub.dropna()
-
-    design_parts = []
-    if cont_vars:
-        design_parts.append(sub[cont_vars].astype(float))
-    if class_vars:
-        design_parts.append(pd.get_dummies(sub[class_vars], drop_first=True, dtype=float))
-    X = pd.concat(design_parts, axis=1) if design_parts else pd.DataFrame(index=sub.index)
-    X = sm.add_constant(X)
+    sub, X = _build_class_design_matrix(df, y, xs, class_vars)
 
     model = sm.OLS(sub[y], X).fit()
     print(model.summary())

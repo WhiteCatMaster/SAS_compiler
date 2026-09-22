@@ -1174,6 +1174,85 @@ def test_proc_logistic_single_outcome_level_reports_clear_message_not_crash(caps
     assert "c statistic undefined" in out
 
 
+def test_proc_logistic_class_variable_categorical_predictor(capsys):
+    # A genuine categorical predictor (region name) must be dummy-encoded
+    # via CLASS rather than coerced to numeric (which would silently give
+    # NaN coefficients / a crash under the old pd.to_numeric-everything
+    # behavior).
+    src = """
+    data src;
+      input region $ outcome;
+      datalines;
+    East 0
+    East 0
+    East 1
+    East 1
+    West 0
+    West 1
+    West 1
+    West 1
+    South 0
+    South 0
+    South 0
+    South 1
+    ;
+    run;
+    proc logistic data=src;
+      class region;
+      model outcome = region;
+      output out=scored p=predicted_prob;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    assert len(df) == 12
+    assert df["predicted_prob"].between(0, 1).all()
+    assert df["predicted_prob"].notna().all()
+
+    out = capsys.readouterr().out
+    assert "region_South" in out
+    assert "region_West" in out
+
+
+def test_proc_logistic_class_variable_mixed_with_numeric_predictor(capsys):
+    # CLASS categorical predictor combined with an ordinary numeric
+    # predictor in the same MODEL statement.
+    src = """
+    data src;
+      input region $ hours outcome;
+      datalines;
+    East 1 0
+    East 2 0
+    East 8 1
+    East 9 1
+    West 1 0
+    West 2 1
+    West 8 1
+    West 9 1
+    South 1 0
+    South 2 0
+    South 8 0
+    South 9 1
+    ;
+    run;
+    proc logistic data=src;
+      class region;
+      model outcome = hours region;
+      output out=scored p=predicted_prob;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    assert len(df) == 12
+    assert df["predicted_prob"].between(0, 1).all()
+    assert df["predicted_prob"].notna().all()
+
+    out = capsys.readouterr().out
+    assert "hours" in out
+    assert "region_South" in out
+    assert "region_West" in out
+
+
 def _seed_sqlite(path, rows):
     import sqlite3
     con = sqlite3.connect(str(path))
