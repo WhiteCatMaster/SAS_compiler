@@ -412,8 +412,21 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   array is passed **by value**: its current element values are copied
   into a fresh list when the function is called, so assignments to
   `arr{i}` inside the function body do not propagate back to the
-  caller's SAS array once the call returns -- there's no general
-  pass-by-reference support.
+  caller's SAS array once the call returns. `CALL` to any `PROC FCMP`
+  routine (`FUNCTION` or `SUBROUTINE`) now actually runs it -- this is
+  a bug fix: it used to be a silent no-op, generating a `pass` and
+  discarding the call entirely, regardless of whether the routine had
+  side effects. **`OUTARGS`** gives scalar (non-`ARRAY`) parameters
+  pass-by-reference, real-SAS style: `OUTARGS name1, name2, ...;` must
+  be the routine body's first statement, naming one or more of the
+  routine's own scalar parameters; at the call site the corresponding
+  argument must be a bare variable name (mirroring the `ARRAY`
+  call-site requirement above), which is updated with the routine's
+  value for that parameter after the call returns. A routine with
+  `OUTARGS` can only be invoked via `CALL name(...)`, not used as a
+  value-returning expression (matching real SAS). There's no general
+  pass-by-reference support beyond this -- `ARRAY` parameters stay
+  by-value as described above, and `OUTARGS` itself is scalar-only.
 - **Multi-dimensional ARRAYs** are stored flat in row-major order and
   tested through 3 dimensions (`array c{2,2,2} ...;`); there is no
   declared cap, but going much higher than that is unverified. Both a
