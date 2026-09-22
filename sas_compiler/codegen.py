@@ -1336,6 +1336,8 @@ class CodeGen:
             self._gen_proc_surveyselect(proc)
         elif name == "arima":
             self._gen_proc_arima(proc)
+        elif name == "lifetest":
+            self._gen_proc_lifetest(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2294,6 +2296,31 @@ class CodeGen:
         self._gen_proc_filters(proc)
         self.w(
             f"_r.proc_cluster_report(_df, {var_list!r}, {method!r}, id_var={id_var!r})"
+        )
+
+    def _gen_proc_lifetest(self, proc: A.ProcStep):
+        """Kaplan-Meier survival curve estimation (statsmodels SurvfuncRight).
+        Print-only, like PROC TTEST/ANOVA/CLUSTER -- no OUTSURV=-style
+        output dataset here.
+
+        TIME timevar*censorvar(censorvalue); is required -- there is
+        nothing to estimate without it. Scoped to exactly one censor
+        value (real SAS allows a list, CENSOR(0, 2); out of scope here --
+        see proc_lifetest_km's docstring). STRATA is optional and, when
+        given, prints one KM table per stratum plus an overall log-rank
+        test (SurvfuncRight/survdiff) comparing survival across strata."""
+        dsname = self._resolve_ds(proc)
+        time_clause = next((c[1] for c in proc.clauses if c[0] == "time"), None)
+        if not time_clause:
+            raise CodegenError("PROC LIFETEST requires a TIME statement")
+        timevar, censorvar, censorvalue = time_clause
+        strata_clause = self._clause(proc, "strata")
+        strata_var = strata_clause[0][0] if strata_clause else None
+        self.w(f"_df = {self._proc_src(proc, dsname)}")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_r.proc_lifetest_km(_df, {timevar!r}, {censorvar!r}, {censorvalue!r}, "
+            f"strata={strata_var!r})"
         )
 
     def _gen_proc_arima(self, proc: A.ProcStep):

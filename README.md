@@ -292,7 +292,23 @@ iterative re-`ESTIMATE`), no differencing-in-`VAR` syntax
 transfer-function (ARIMAX) terms, no `OUTLIER` statement, no `ESTIMATE
 METHOD=`; `FORECAST ID=` is parsed (so it doesn't error) but real
 date-arithmetic extrapolation of that variable is not implemented —
-forecast periods in `OUT=` are always sequential integers `1..LEAD`).
+forecast periods in `OUT=` are always sequential integers `1..LEAD`),
+and `LIFETEST` (Kaplan-Meier survival curve estimation via
+`statsmodels.duration.survfunc.SurvfuncRight` — `TIME
+timevar*censorvar(censorvalue);` is required and names the
+time-to-event variable, the censoring-status variable, and the single
+value of that status variable meaning "censored" (any other value
+means the event occurred); prints the KM table (Time/Surv prob/Surv
+prob SE/num at risk/num events, via `.summary()`), a brief N/events/
+censored line, and the median survival time (the first time the curve
+drops to <= 50% survival, or `.` when never reached — its confidence
+interval is not computed). An optional `STRATA groupvar;` prints one
+KM table per distinct stratum value plus, when there are 2+ strata, an
+overall log-rank test (`statsmodels.duration.survfunc.survdiff`,
+Chi-Square and p-value) comparing survival across them. Scope cuts:
+exactly one `CENSOR()` value is supported — real SAS's `CENSOR(0, 2)`-
+style multi-value lists are not — and there is no `OUTSURV=` output
+dataset; like `TTEST`/`ANOVA`/`CLUSTER`, `LIFETEST` is print-only).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
@@ -461,8 +477,8 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA` raise a clear `NotImplementedError` naming
-  the missing PROC, rather than silently doing nothing.
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST` raise a clear `NotImplementedError`
+  naming the missing PROC, rather than silently doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
   `CRITERION=` (a numeric fuzzy-equality tolerance), and `TRANSFORM`
   (applies `LOG`/`SQRT`/`EXP`/`ABS` to named variables in both BASE and

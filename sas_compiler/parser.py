@@ -1618,6 +1618,26 @@ class Parser:
                     pairs.append((v1, v2))
                 clauses.append(("paired", pairs))
                 self.skip_to_semi()
+            elif ckw == "time" and name == "lifetest":
+                # TIME timevar*censorvar(censorvalue);
+                self.advance()
+                timevar = ""
+                censorvar = ""
+                censorvalue = 0.0
+                if self.peek().type == TokType.IDENT:
+                    timevar = self.advance().value.lower()
+                if self.peek().type == TokType.OP and self.peek().value == "*":
+                    self.advance()
+                if self.peek().type == TokType.IDENT:
+                    censorvar = self.advance().value.lower()
+                if self.peek().type == TokType.LPAREN:
+                    self.advance()
+                    if self.peek().type == TokType.NUMBER:
+                        censorvalue = float(self.advance().value)
+                    if self.peek().type == TokType.RPAREN:
+                        self.advance()
+                clauses.append(("time", (timevar, censorvar, censorvalue)))
+                self.skip_to_semi()
             elif ckw in ("var", "by", "class", "id", "freq", "with", "strata"):
                 self.advance()
                 names = []
