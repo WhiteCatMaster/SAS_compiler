@@ -918,6 +918,92 @@ def test_proc_logistic_fits_and_scores():
     assert df.sort_values("hours")["predicted_prob"].is_monotonic_increasing
 
 
+def test_proc_logistic_reports_high_c_statistic_for_separable_data(capsys):
+    from sklearn.metrics import roc_auc_score
+
+    src = """
+    data src;
+      input hours pass;
+      datalines;
+    1 0
+    1.5 0
+    2 0
+    2.5 0
+    3 0
+    8 1
+    8.5 1
+    9 1
+    9.5 1
+    10 1
+    ;
+    run;
+    proc logistic data=src;
+      model pass = hours;
+      output out=scored p=predicted_prob;
+    run;
+    """
+    ds = run_sas(src)
+    df = ds["scored"]
+    out = capsys.readouterr().out
+    assert "Association of Predicted Probabilities and Observed Responses" in out
+
+    expected_c = roc_auc_score(df["pass"], df["predicted_prob"])
+    assert expected_c > 0.95  # clearly separable outcome -> c near 1
+
+    c_line = [ln for ln in out.splitlines() if ln.strip().startswith("c ")][0]
+    printed_c = float(c_line.split()[-1])
+    assert abs(printed_c - expected_c) < 1e-3
+
+
+def test_proc_logistic_reports_c_statistic_near_half_for_weak_relationship(capsys):
+    import numpy as np
+
+    rng = np.random.RandomState(0)
+    n = 200
+    hours = rng.normal(size=n)
+    # outcome essentially independent of the predictor
+    pass_ = rng.randint(0, 2, size=n)
+    df = pd.DataFrame({"hours": hours, "pass": pass_})
+    lines = "\n".join(f"{h} {p}" for h, p in zip(hours, pass_))
+    src = f"""
+    data src;
+      input hours pass;
+      datalines;
+{lines}
+    ;
+    run;
+    proc logistic data=src;
+      model pass = hours;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    c_line = [ln for ln in out.splitlines() if ln.strip().startswith("c ")][0]
+    printed_c = float(c_line.split()[-1])
+    assert 0.35 < printed_c < 0.65  # near-random relationship -> c close to 0.5
+
+
+def test_proc_logistic_single_outcome_level_reports_clear_message_not_crash(capsys):
+    src = """
+    data src;
+      input hours pass;
+      datalines;
+    1 0
+    2 0
+    3 0
+    4 0
+    5 0
+    ;
+    run;
+    proc logistic data=src;
+      model pass = hours;
+    run;
+    """
+    run_sas(src)
+    out = capsys.readouterr().out
+    assert "c statistic undefined" in out
+
+
 def _seed_sqlite(path, rows):
     import sqlite3
     con = sqlite3.connect(str(path))

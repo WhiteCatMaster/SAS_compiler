@@ -1868,11 +1868,22 @@ def proc_logistic_fit(df: pd.DataFrame, y: str, xs: list, out_stats: dict | None
         if name == "const":
             continue
         print(f"  {name}: {_math.exp(coef):.4f}")
+    print()
+    print("Association of Predicted Probabilities and Observed Responses")
+    predicted_probs = model.predict(X)
+    if sub[y].nunique() < 2:
+        print("  c statistic undefined (the response has only one observed level)")
+    else:
+        from sklearn.metrics import roc_auc_score
+
+        c_stat = roc_auc_score(sub[y], predicted_probs)
+        print(f"  c            {c_stat:.3f}")
+        print(f"  Somers' D    {2 * c_stat - 1:.3f}")
     if not out_stats:
         return None
     result = df.loc[sub.index].copy()
     for name in out_stats.get("p", []):
-        result[name] = model.predict(X)
+        result[name] = predicted_probs
     return result
 
 
