@@ -350,6 +350,80 @@ def test_format_statement_and_put_with_format(capsys):
     assert "10.0%" in captured.out
 
 
+def test_file_statement_two_files_route_put_per_statement(tmp_path):
+    # A FILE statement is a real per-statement effect: every PUT after it
+    # (until the next FILE) goes to *that* fileref, not "last FILE wins".
+    p1 = tmp_path / "one.txt"
+    p2 = tmp_path / "two.txt"
+    src = f"""
+    data _null_;
+      file "{p1}";
+      put "one";
+      file "{p2}";
+      put "two";
+    run;
+    """
+    run_sas(src)
+    assert p1.read_text() == "one\n"
+    assert p2.read_text() == "two\n"
+
+
+def test_file_statement_inside_if_do_redirects_some_rows(capsys):
+    # A FILE statement nested inside IF/DO must switch the PUT target
+    # following normal control flow, leaving rows that never hit it on
+    # stdout (the default target before any FILE statement has run).
+    import tempfile
+    import os
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    try:
+        src = f"""
+        data _null_;
+          input x;
+          if x = 2 then do;
+            file "{path}";
+            put x;
+          end;
+          else do;
+            file print;
+            put x;
+          end;
+          datalines;
+        1
+        2
+        3
+        ;
+        run;
+        """
+        run_sas(src)
+        captured = capsys.readouterr()
+        assert "1" in captured.out.split()
+        assert "3" in captured.out.split()
+        assert "2" not in captured.out.split()
+        with open(path) as f:
+            file_content = f.read()
+        assert file_content == "2\n"
+    finally:
+        os.remove(path)
+
+
+def test_file_statement_reexecuted_in_loop_does_not_truncate(tmp_path):
+    # Re-executing FILE "same path" (e.g. inside a DO loop) must reuse the
+    # already-open handle rather than reopening/truncating it each time.
+    p = tmp_path / "loop.txt"
+    src = f"""
+    data _null_;
+      do i = 1 to 5;
+        file "{p}";
+        put i;
+      end;
+    run;
+    """
+    run_sas(src)
+    lines = p.read_text().splitlines()
+    assert lines == ["1", "2", "3", "4", "5"]
+
+
 def test_format_propagates_through_sort():
     src = """
     data money;
