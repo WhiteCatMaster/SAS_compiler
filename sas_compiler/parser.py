@@ -1671,6 +1671,28 @@ class Parser:
                     if ok and subject_var:
                         clauses.append(("random", subject_var))
                     self.skip_to_semi()
+            elif ckw == "parms" and name == "nlin":
+                # PARMS name1=start1 name2=start2 ...;
+                # Declares the parameters PROC NLIN estimates, each with a
+                # starting value for the iterative least-squares search.
+                self.advance()
+                pairs = []
+                while self.peek().type == TokType.IDENT:
+                    pname = self.advance().value.lower()
+                    if self.peek().type == TokType.OP and self.peek().value == "=":
+                        self.advance()
+                    neg = False
+                    if self.peek().type == TokType.OP and self.peek().value == "-":
+                        neg = True
+                        self.advance()
+                    start = 0.0
+                    if self.peek().type == TokType.NUMBER:
+                        start = float(self.advance().value)
+                    pairs.append((pname, -start if neg else start))
+                    if self.peek().type == TokType.COMMA:
+                        self.advance()
+                clauses.append(("parms", pairs))
+                self.skip_to_semi()
             elif ckw in ("var", "by", "class", "id", "freq", "with", "strata"):
                 self.advance()
                 names = []

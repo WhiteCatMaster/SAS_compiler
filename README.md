@@ -423,10 +423,28 @@ primary purpose) — only an already-regular series is supported; no
 `CORR`/`SPECTRA`/`SEASON`/`TREND` statements; no `OUTDECOMP=`-precise
 column layout (see above). Decomposition defaults to additive (the
 simpler, more broadly-applicable choice), with a `MODEL=multiplicative`
-PROC-statement option to switch to multiplicative decomposition).
+PROC-statement option to switch to multiplicative decomposition), and
+`NLIN` (nonlinear least-squares regression against an arbitrary
+user-specified expression — unlike every other `MODEL`-using PROC here,
+`NLIN`'s `MODEL y = <expr>;` right-hand side is a genuine algebraic
+expression, not a flat predictor list, e.g. `model y = b0 * exp(b1 *
+x);` or `model y = b0 / (1 + exp(-b1 * (x - b2)));`; it's parsed with
+this codebase's own DATA-step expression parser/codegen and reuses the
+exact same operator/function-call support (`EXP`, `LOG`, `**`, ...)
+every other SAS expression already gets, rather than a second
+hand-rolled expression evaluator. `PARMS name1=start1 name2=start2
+...;` is required and declares the parameters to estimate with their
+starting values; every other variable name found in the `MODEL`
+expression is treated as an x-variable pulled from the data. Fits via
+`scipy.optimize.curve_fit` and prints a parameter-estimate table
+(estimate + approximate standard error) plus a residual-sum-of-squares/
+R-square summary line. Scope cut: no `OUTPUT OUT=` (real NLIN's OUTPUT
+statement has many derivative-/confidence-interval-related keywords out
+of scope here) — `NLIN` is print-only, like `TTEST`/`ANOVA`/`CLUSTER`).
 `MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, `ANOVA`,
-`GENMOD`, `ROBUSTREG`, and `MIXED`.
+`GENMOD`, `ROBUSTREG`, and `MIXED` (`NLIN` uses its own `MODEL y =
+<expr>;` shape, described above, not this shared one).
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
 libref to an actual SQLite database file, `LIBNAME libref
@@ -593,7 +611,8 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`GENMOD`/`ROBUSTREG`/`FASTCLUS`/`PRINCOMP`/`FACTOR`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/`TIMESERIES` raise a clear
+  `SQL`/`SURVEYSELECT`/`ARIMA`/`LIFETEST`/`PHREG`/`DISCRIM`/`MIXED`/
+  `TIMESERIES`/`NLIN` raise a clear
   `NotImplementedError` naming the missing PROC, rather than silently
   doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),

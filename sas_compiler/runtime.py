@@ -3385,6 +3385,76 @@ def proc_timeseries_decomp(df: pd.DataFrame, var: str, period: int = 12,
     return out.reindex(series.index)
 
 
+def proc_nlin_fit(df: pd.DataFrame, y_name: str, parm_names: list, start_values: list,
+                   x_names: list, model_fn) -> None:
+    """PROC NLIN: nonlinear least-squares regression fitting an arbitrary
+    user-specified expression (compiled into `model_fn`, a Python function
+    taking one dict `_p` mapping every parameter/x-variable name to its
+    current value and returning the model's predicted y for that row --
+    generated from the parsed MODEL expression by
+    CodeGen._gen_proc_nlin/gen_expr, reusing this codebase's own DATA-step
+    expression codegen).
+
+    Coerces `y_name` and every name in `x_names` to numeric and drops rows
+    with any missing value among them, then runs `scipy.optimize.curve_fit`
+    to estimate `parm_names` starting from `start_values`. Prints a
+    parameter-estimate table (with approximate standard errors from the
+    fit's covariance matrix) and a residual-sum-of-squares/R-squared
+    summary line. Print-only: returns None (no OUTPUT OUT=, an explicit
+    scope cut -- real NLIN's OUTPUT statement has many derivative-/
+    confidence-interval-related keywords out of scope here). Convergence
+    failures raise a clear RuntimeError rather than letting scipy's raw
+    exception propagate uninformatively."""
+    import numpy as np
+    from scipy.optimize import curve_fit
+
+    cols = [y_name] + list(x_names)
+    sub = df[cols].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(sub) <= len(parm_names):
+        raise RuntimeError(
+            f"PROC NLIN: too few complete observations ({len(sub)}) to fit "
+            f"{len(parm_names)} parameter(s)"
+        )
+
+    y_values = sub[y_name].to_numpy(dtype=float)
+    x_columns = [sub[name].to_numpy(dtype=float) for name in x_names]
+
+    def _wrapper(_X, *params):
+        param_map = dict(zip(parm_names, params))
+        n = len(y_values) if not x_columns else len(x_columns[0])
+        preds = np.empty(n, dtype=float)
+        for i in range(n):
+            row = dict(param_map)
+            for name, col in zip(x_names, x_columns):
+                row[name] = col[i]
+            preds[i] = model_fn(row)
+        return preds
+
+    x_stack = np.vstack(x_columns) if x_columns else np.zeros((0, len(y_values)))
+    try:
+        popt, pcov = curve_fit(_wrapper, x_stack, y_values, p0=list(start_values))
+    except Exception as exc:
+        raise RuntimeError(f"PROC NLIN: model did not converge: {exc}") from exc
+
+    stderr = np.sqrt(np.diag(pcov)) if pcov is not None else [float("nan")] * len(popt)
+    resid = y_values - _wrapper(x_stack, *popt)
+    ss_res = float(np.sum(resid ** 2))
+    ss_tot = float(np.sum((y_values - y_values.mean()) ** 2))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot else float("nan")
+
+    print("The NLIN Procedure")
+    print()
+    print("Estimation Summary")
+    print(f"{'Parameter':<15}{'Estimate':>15}{'Approx Std Error':>20}")
+    for name, est, se in zip(parm_names, popt, stderr):
+        print(f"{name:<15}{est:>15.4f}{se:>20.4f}")
+    print()
+    print(f"Residual Sum of Squares: {ss_res:.4f}")
+    print(f"R-Square:                {r_squared:.4f}")
+    print()
+    return None
+
+
 # ---------------- PROC SGPLOT ----------------
 def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
     """Render one or more overlaid SGPLOT-style plot statements onto a
