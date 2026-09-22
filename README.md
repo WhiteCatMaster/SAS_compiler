@@ -162,7 +162,8 @@ cell's sum divided by the overall sum of the analysis variable, times
 SAS TABULATE are not implemented, nor are `PCTN`/`NMISS`/`RANGE`/`CV`/
 percentile statistics), `SGPLOT` (`SCATTER`,
 `SERIES`, `VBAR`/`HBAR` with or without `RESPONSE=`, `HISTOGRAM`,
-`DENSITY`, `REFLINE` — multiple
+`DENSITY`, `VBOX`/`HBOX` (with optional `CATEGORY=` for one box per
+group), `REFLINE` — multiple
 plot statements overlay onto one figure; saved to a PNG via
 `OUT="path.png"`, or a default `sgplot_N.png` if omitted, since there's
 no interactive display here), `COMPARE` (`BASE=`/`COMPARE=`, `ID`/`VAR`
