@@ -2920,7 +2920,7 @@ class CodeGen:
 
     # ---- PROC SGPLOT ----
     _SGPLOT_KV_RE = re.compile(r"([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)")
-    _SGPLOT_KINDS = ("scatter", "series", "vbar", "hbar", "histogram", "density", "refline")
+    _SGPLOT_KINDS = ("scatter", "series", "vbar", "hbar", "histogram", "density", "refline", "vbox", "hbox")
 
     def _parse_sgplot_stmt(self, ckw: str, raw: str) -> dict:
         kv = {k.lower(): v.lower() for k, v in self._SGPLOT_KV_RE.findall(raw)}
@@ -2939,6 +2939,11 @@ class CodeGen:
             if not m:
                 raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires a variable")
             return {"kind": ckw, "var": m.group(1).lower()}
+        if ckw in ("vbox", "hbox"):
+            m = re.search(r"(?:vbox|hbox)\s+([A-Za-z_]\w*)", raw, re.I)
+            if not m:
+                raise CodegenError(f"PROC SGPLOT {ckw.upper()} requires a variable")
+            return {"kind": ckw, "var": m.group(1).lower(), "category": kv.get("category")}
         if ckw == "refline":
             body = raw.split("/", 1)[0]
             vals = [float(v) for v in re.findall(r"-?\d+\.?\d*(?:[eE][+-]?\d+)?", body)]
@@ -2954,7 +2959,7 @@ class CodeGen:
         ]
         if not plots:
             raise CodegenError(
-                "PROC SGPLOT requires at least one SCATTER/SERIES/VBAR/HBAR/HISTOGRAM/DENSITY/REFLINE statement"
+                "PROC SGPLOT requires at least one SCATTER/SERIES/VBAR/HBAR/HISTOGRAM/DENSITY/VBOX/HBOX/REFLINE statement"
             )
         self.sgplot_counter += 1
         out_path = proc.options.get("out")

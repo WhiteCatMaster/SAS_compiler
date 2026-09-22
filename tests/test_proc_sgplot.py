@@ -72,6 +72,37 @@ def test_histogram_creates_png(tmp_path):
     _assert_real_png(out)
 
 
+def test_vbox_creates_png(tmp_path):
+    out = tmp_path / "vbox.png"
+    src = _DATA + f'proc sgplot data=students out="{out}"; vbox score; run;\n'
+    run_sas(src)
+    _assert_real_png(out)
+
+
+def test_vbox_category_creates_png(tmp_path):
+    out = tmp_path / "vbox_category.png"
+    src = _DATA + f'proc sgplot data=students out="{out}"; vbox score / category=region; run;\n'
+    run_sas(src)
+    _assert_real_png(out)
+
+
+def test_hbox_creates_png(tmp_path):
+    out = tmp_path / "hbox.png"
+    src = _DATA + f'proc sgplot data=students out="{out}"; hbox score; run;\n'
+    run_sas(src)
+    _assert_real_png(out)
+
+
+def test_vbox_and_refline_overlay_creates_png(tmp_path):
+    out = tmp_path / "vbox_refline.png"
+    src = (
+        _DATA
+        + f'proc sgplot data=students out="{out}"; vbox score / category=region; refline 80; run;\n'
+    )
+    run_sas(src)
+    _assert_real_png(out)
+
+
 def test_overlay_multiple_plots_creates_one_png(tmp_path):
     out = tmp_path / "overlay.png"
     src = (

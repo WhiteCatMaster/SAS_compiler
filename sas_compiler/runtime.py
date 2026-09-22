@@ -3446,6 +3446,26 @@ def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str 
             else:
                 ax.hist(sub, density=True)
             xlabel, ylabel = var, "Density"
+        elif kind in ("vbox", "hbox"):
+            var = p["var"]
+            orientation = "vertical" if kind == "vbox" else "horizontal"
+            cat = p.get("category")
+            if cat:
+                sub = df[[var, cat]].dropna()
+                levels = sorted(sub[cat].unique(), key=str)
+                data = [sub.loc[sub[cat] == lvl, var] for lvl in levels]
+                tick_labels = [str(lvl) for lvl in levels]
+                ax.boxplot(data, orientation=orientation, tick_labels=tick_labels)
+                if kind == "vbox":
+                    xlabel, ylabel = cat, var
+                else:
+                    xlabel, ylabel = var, cat
+            else:
+                ax.boxplot(df[var].dropna(), orientation=orientation)
+                if kind == "vbox":
+                    ylabel = var
+                else:
+                    xlabel = var
         elif kind == "refline":
             for v in p.get("values", []):
                 ax.axvline(v)
