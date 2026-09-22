@@ -1329,6 +1329,8 @@ class CodeGen:
             self._gen_proc_princomp(proc)
         elif name == "cluster":
             self._gen_proc_cluster(proc)
+        elif name == "surveyselect":
+            self._gen_proc_surveyselect(proc)
         else:
             self.w(f"raise NotImplementedError({'PROC ' + name.upper() + ' is not supported by this compiler'!r})")
         self.w("_r.ods_proc_boundary()")
@@ -2589,6 +2591,41 @@ class CodeGen:
             proc.options.get("out") if isinstance(proc.options.get("out"), str) else None,
             out, "_df",
         )
+
+    def _gen_proc_surveyselect(self, proc: A.ProcStep):
+        dsname = self._resolve_ds(proc)
+        out_raw = proc.options.get("out") if isinstance(proc.options.get("out"), str) else None
+        if not out_raw:
+            raise CodegenError("PROC SURVEYSELECT requires OUT=")
+        out = normalize_dsname(out_raw)
+
+        method = proc.options.get("method")
+        method = str(method).lower() if method is not None and method is not True else "srs"
+        if method != "srs":
+            raise CodegenError(f"PROC SURVEYSELECT METHOD={method.upper()} is not supported (only METHOD=SRS)")
+
+        n_opt = proc.options.get("n")
+        samprate_opt = proc.options.get("samprate")
+        if n_opt is None and samprate_opt is None:
+            raise CodegenError("PROC SURVEYSELECT requires exactly one of N= or SAMPRATE=")
+        if n_opt is not None and samprate_opt is not None:
+            raise CodegenError("PROC SURVEYSELECT accepts only one of N= or SAMPRATE=, not both")
+        n_val = int(float(n_opt)) if n_opt is not None else None
+        samprate_val = float(samprate_opt) if samprate_opt is not None else None
+
+        seed_opt = proc.options.get("seed")
+        seed_val = int(float(seed_opt)) if seed_opt is not None else None
+
+        strata_clause = self._clause(proc, "strata")
+        strata_list = [n for n, _ in strata_clause] if strata_clause else None
+
+        self.w(f"_df = ({self._proc_src(proc, dsname)}).copy()")
+        self._gen_proc_filters(proc)
+        self.w(
+            f"_df = _r.proc_surveyselect(_df, n={n_val!r}, samprate={samprate_val!r}, "
+            f"seed={seed_val!r}, strata={strata_list!r})"
+        )
+        self._store_out(out_raw, out, "_df")
 
     def _opt_src(self, raw: str | None, flat: str) -> str:
         """Like _proc_src but for BASE=/DATA= style options carrying a raw

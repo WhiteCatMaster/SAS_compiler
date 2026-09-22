@@ -228,7 +228,20 @@ of them), `COV` to fit PCA on the raw covariance matrix instead of the
 default standardize-then-correlation-matrix behavior, and `OUTPUT
 OUT=`/`OUT=` for the input rows plus 1-based `Prin1..PrinN` score
 columns, alongside printed Eigenvalues (Eigenvalue/Difference/
-Proportion/Cumulative) and Eigenvectors tables). `MODEL y = x1 x2
+Proportion/Cumulative) and Eigenvectors tables), and `SURVEYSELECT`
+(simple random sampling — `METHOD=SRS`, the only supported method and
+real SAS's own default, so `METHOD=` can be omitted entirely; exactly
+one of `N=n` (an exact sample size) or `SAMPRATE=rate` (a proportion,
+sampling `round(rate * nrows)` rows) is required; optional `SEED=` for
+reproducible sampling, omitted for a random seed each run; and an
+optional `STRATA var1 var2 ...;` that samples independently within
+each distinct combination of STRATA values, applying the same
+`N=`/`SAMPRATE=` per stratum — a stratum with fewer rows than `N=`
+requests contributes all of its rows rather than erroring; `OUT=` is
+required, like real SAS. Scope cuts: only `METHOD=SRS` is implemented
+— systematic, PPS, and SAS's other sampling methods are not — and
+there is no `OUTALL=`/`SELECTALL` or other advanced option support).
+`MODEL y = x1 x2
 ...;` is the shared syntax for `REG`, `LOGISTIC`, `GLM`, and `ANOVA`.
 
 **Real databases:** `LIBNAME libref "path/to/file.db";` connects a
@@ -396,8 +409,8 @@ These are deliberate scope cuts, not oversights — real SAS is enormous:
   `FORMAT`/`TRANSPOSE`/`IMPORT`/`EXPORT`/`DATASETS`/`UNIVARIATE`/`RANK`/
   `CORR`/`REG`/`LOGISTIC`/`GLM`/`FASTCLUS`/`PRINCOMP`/`CLUSTER`/`TTEST`/
   `ANOVA`/`NPAR1WAY`/`STANDARD`/`REPORT`/`TABULATE`/`COMPARE`/`FCMP`/
-  `SQL` raise a clear `NotImplementedError` naming the missing PROC, rather
-  than silently doing nothing.
+  `SQL`/`SURVEYSELECT` raise a clear `NotImplementedError` naming the
+  missing PROC, rather than silently doing nothing.
 - **PROC COMPARE** supports `BY` (a separate report per BY-group),
   `CRITERION=` (a numeric fuzzy-equality tolerance), and `TRANSFORM`
   (applies `LOG`/`SQRT`/`EXP`/`ABS` to named variables in both BASE and

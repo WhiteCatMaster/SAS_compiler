@@ -1616,7 +1616,7 @@ class Parser:
                     pairs.append((v1, v2))
                 clauses.append(("paired", pairs))
                 self.skip_to_semi()
-            elif ckw in ("var", "by", "class", "id", "freq", "with"):
+            elif ckw in ("var", "by", "class", "id", "freq", "with", "strata"):
                 self.advance()
                 names = []
                 while self.peek().type == TokType.IDENT:

@@ -2483,6 +2483,49 @@ def proc_standardize(df: pd.DataFrame, var_names: list, target_mean: float = 0.0
     return result
 
 
+def _surveyselect_sample(group: pd.DataFrame, n: int | None, samprate: float | None,
+                          seed: int | None) -> pd.DataFrame:
+    """Draw a simple random sample from a single group of rows (the whole
+    dataset when there is no STRATA, or one stratum's rows when there is).
+    N= is clamped to the group size instead of erroring when the group has
+    fewer rows than requested, matching real SAS's per-stratum allocation."""
+    if n is not None:
+        k = min(n, len(group))
+        return group.sample(n=k, random_state=seed)
+    return group.sample(frac=samprate, random_state=seed)
+
+
+# ---------------- PROC SURVEYSELECT ----------------
+def proc_surveyselect(df: pd.DataFrame, n: int | None = None, samprate: float | None = None,
+                       seed: int | None = None, strata: list | None = None) -> pd.DataFrame:
+    """PROC SURVEYSELECT, scoped to METHOD=SRS (simple random sampling).
+    Exactly one of N= (exact sample size) or SAMPRATE= (proportion, sampling
+    round(SAMPRATE * nrows) rows) is expected to have been validated by the
+    caller. With STRATA, sampling is done independently within each distinct
+    combination of STRATA variable values, applying the same N=/SAMPRATE=
+    to every stratum (a stratum smaller than N= contributes all its rows,
+    no error). Prints a short selection summary and returns the sampled
+    rows (same columns as the input, just a row subset)."""
+    print("The SURVEYSELECT Procedure")
+    if strata:
+        groups = df.groupby(strata, dropna=False, sort=False)
+        parts = []
+        counts = []
+        for key, group in groups:
+            sampled = _surveyselect_sample(group, n, samprate, seed)
+            parts.append(sampled)
+            key_tuple = key if isinstance(key, tuple) else (key,)
+            counts.append(list(key_tuple) + [len(sampled)])
+        result = pd.concat(parts) if parts else df.iloc[0:0].copy()
+        summary = pd.DataFrame(counts, columns=list(strata) + ["Selected"])
+        print("Selection Probabilities and Sample Sizes by Stratum")
+        print(summary.to_string(index=False))
+    else:
+        result = _surveyselect_sample(df, n, samprate, seed)
+        print(f"NOTE: {len(result)} of {len(df)} observations selected.")
+    return result
+
+
 # ---------------- PROC SGPLOT ----------------
 def proc_sgplot_render(df: pd.DataFrame, plots: list, out_path: str, title: str | None = None):
     """Render one or more overlaid SGPLOT-style plot statements onto a
